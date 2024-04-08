@@ -94,3 +94,16 @@ class ManiSkill2Dataset(Dataset):
         action = th.from_numpy(self.actions[idx]).float()
         obs = th.from_numpy(self.observations[idx]).float()
         return obs, action
+    
+if __name__ == "__main__":
+    env_id = "LiftCube-v0"
+    traj_name = "trajectory.state.pd_ee_delta_pose.h5"
+    path = f"data/demos/v0/rigid_body/{env_id}/{traj_name}"
+    # path = "data/demos/v0/rigid_body/LiftCube-v0/trajectory.state.pd_ee_delta_pose.h5"
+    assert osp.exists(path)
+    dataset = ManiSkill2Dataset(path)
+    print(len(dataset.episodes))
+    dataloader = DataLoader(dataset, batch_size=256, num_workers=0, pin_memory=True, drop_last=True, shuffle=True)
+    obs, action = dataset[0]
+    print("Observation: ", obs.shape)
+    print("Action: ", action.shape)
