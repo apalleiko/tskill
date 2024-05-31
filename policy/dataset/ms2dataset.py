@@ -19,7 +19,7 @@ def tensor_to_numpy(x):
     return x
 
 
-def convert_observation(observation):
+def convert_observation(observation, robot_state_only):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
 
@@ -31,13 +31,15 @@ def convert_observation(observation):
     depth2 = image_obs["hand_camera"]["depth"]
 
     # we provide a simple tool to flatten dictionaries with state data
-
-    state = np.hstack(
-        [
-            flatten_state_dict(observation["agent"]),
-            flatten_state_dict(observation["extra"]),
-        ]
-    )
+    if robot_state_only:
+        state = flatten_state_dict(observation["agent"])
+    else:
+        state = np.hstack(
+            [
+                flatten_state_dict(observation["agent"]),
+                flatten_state_dict(observation["extra"]),
+            ]
+        )
 
     # combine the RGB and depth images
     rgbd = np.concatenate([rgb, depth, rgb2, depth2], axis=-1)
@@ -57,9 +59,16 @@ def rescale_rgbd(rgbd, scale_rgb_only=False, discard_depth=False,
         depth2 = rgbd[..., 7:8] / (2**10)
     
     if discard_depth:
-        rgbd = np.concatenate([rgb1, rgb2], axis=-1)
+        if separate_cams:
+            rgbd = np.stack([rgb1, rgb2], axis=-1)
+        else:
+            rgbd = np.concatenate([rgb1, rgb2], axis=-1)
     else:
-        rgbd = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
+        if separate_cams:
+            rgbd = np.stack([np.concatenate([rgb1, depth1], axis=-1), 
+                             np.concatenate([rgb2, depth2], axis=-1)], axis=-1)
+        else:
+            rgbd = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
 
     return rgbd
 
@@ -76,7 +85,7 @@ def load_h5_data(data):
 
 
 class ManiSkillDataset(Dataset):
-    def __init__(self, dataset_file: str) -> None:
+    def __init__(self, dataset_file: str, indices: list) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -85,6 +94,7 @@ class ManiSkillDataset(Dataset):
         self.env_info = self.json_data["env_info"]
         self.env_id = self.env_info["env_id"]
         self.env_kwargs = self.env_info["env_kwargs"]
+        self.owned_indices = indices
     
     def __len__(self):
         raise(NotImplementedError)
@@ -142,63 +152,136 @@ class ManiSkillstateDataset(ManiSkillDataset):
 class ManiSkillrgbSeqDataset(ManiSkillDataset):
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
-    def __init__(self, dataset_file: str) -> None:
+    def __init__(self, dataset_file: str, indices: list, max_seq_len: int = 0, pad=True) -> None:
         self.dataset_file = dataset_file
-        super().__init__(dataset_file)
+        self.data = h5py.File(dataset_file, "r")
+        json_path = dataset_file.replace(".h5", ".json")
+        self.json_data = load_json(json_path)
+        self.episodes = self.json_data["episodes"]
+        self.env_info = self.json_data["env_info"]
+        self.env_id = self.env_info["env_id"]
+        self.env_kwargs = self.env_info["env_kwargs"]
+        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
+        self.max_seq_len = max_seq_len
+        self.pad = pad
 
     def __len__(self):
-        return len(self.episodes)
+        return len(self.owned_indices)
 
     def __getitem__(self, idx):
-        eps = self.episodes[idx]
+        eps = self.episodes[self.owned_indices[idx]]
         trajectory = self.data[f"traj_{eps['episode_id']}"]
         trajectory = load_h5_data(trajectory)
 
         # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"])
+        obs = convert_observation(trajectory["obs"], robot_state_only=True)
         
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
         action = th.from_numpy(trajectory["actions"]).float()
         rgbd = obs["rgbd"][:-1]
 
-        rgbd = rescale_rgbd(rgbd, discard_depth=True)
+        rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
         
         # permute data so that channels are the first dimension as PyTorch expects this
-        # (bs, num_cams, channels, img_w, img_h)
-        rgbd = th.from_numpy(rgbd).float().permute((0, 3, 1, 2))
+        # (seq, num_cams, channels, img_w, img_h)
+        rgb = th.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))
         state = th.from_numpy(obs["state"][:-1]).float()
-        return dict(rgbd=rgbd, state=state), action
+
+        # Add padding to sequences to match max possible length and generate padding masks
+        if self.pad:
+            pad = self.max_seq_len - rgb.shape[0]
+            seq_mask = np.concatenate((np.zeros(rgb.shape[0]), np.ones(pad)), axis=0).astype(np.bool_)
+
+            rgb_pad = np.zeros([pad] + list(rgb.shape[1:]))
+            # rgb_mask = np.concatenate((np.zeros_like(rgb), np.ones_like(rgb_pad)), axis=0).astype(np.bool_)
+
+            state_pad = np.zeros([pad] + list(state.shape[1:]))
+            # state_mask = np.concatenate((np.zeros_like(state), np.ones_like(state_pad)), axis=0).astype(np.bool_)
+            
+            act_pad = np.zeros([pad] + list(action.shape[1:]))
+            # act_mask = np.concatenate((np.zeros_like(action), np.ones_like(act_pad)), axis=0).astype(np.bool_)
+            
+            rgb = np.concatenate((rgb, rgb_pad), axis=0)
+            action = np.concatenate((action, act_pad), axis=0)
+            state = np.concatenate((state, state_pad), axis=0)
+        else:
+            # rgb_mask = None
+            # act_mask = None
+            seq_mask = None
+
+        return dict(rgb=rgb, state=state, seq_mask=seq_mask), action
     
+
+def get_MS_loaders(cfg, dataset_file: str, val_split: float = 0.1, preshuffle: bool = True, **kwargs) -> None:
+        assert osp.exists(path)
+        data = h5py.File(dataset_file, "r")
+        json_path = dataset_file.replace(".h5", ".json")
+        json_data = load_json(json_path)
+        episodes = json_data["episodes"]
+        num_episodes = len(episodes)
+
+        # If a max sequence length isn't passed, need to find it from the data
+        # This is needed to pads sequences and allow batching
+        max_seq_len = kwargs.get("max_seq_len", 0)
+        if not max_seq_len:
+            for idx in tqdm(range(num_episodes)):
+                eps = episodes[idx]
+                trajectory = data[f"traj_{eps['episode_id']}"]
+                trajectory = load_h5_data(trajectory)
+                seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
+                if seq_size > max_seq_len:
+                    max_seq_len = seq_size
+            print("Max Sequence Length: ",max_seq_len)
+
+        indices = list(range(num_episodes))
+        if preshuffle:
+            np.random.shuffle(indices)
+
+        split_idx = int(np.floor(num_episodes*val_split))
+        train_idx = indices[:num_episodes-split_idx]
+        val_idx = indices[num_episodes-split_idx:]
+
+        train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, max_seq_len)
+        val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, max_seq_len)
+
+        train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
+                                   num_workers=cfg["training"]["n_workers"], 
+                                   pin_memory=True, drop_last=True, shuffle=True)
+        val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
+                                 num_workers=cfg["training"]["n_workers_val"], 
+                                 pin_memory=True, drop_last=True, shuffle=True)
+        
+        return train_loader, val_loader
+
 
 if __name__ == "__main__":
     path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-    assert osp.exists(path)
-    # dataset = ManiSkillrgbdDataset(path)
-    dataset = ManiSkillrgbSeqDataset(path)
+    cfg = {"training": {"batch_size": 5, "batch_size_val": 5,
+                        "n_workers": 0, "n_workers_val": 0}}
+
+    dataset = ManiSkillrgbSeqDataset(path, None, pad=False)
     print("Length of Dataset: ",len(dataset))
     
-    # Have to batch with only 1 since episodes are not the same length
-    dataloader = DataLoader(dataset, batch_size=1, num_workers=0, pin_memory=True, drop_last=True, shuffle=True)
-    obs, action = dataset[13]
-    print("Observation: ", [(key,item.shape) for key,item in obs.items()])
-    
+    train_loader, val_loader = get_MS_loaders(cfg, path, preshuffle=False, max_seq_len=200)
+    print("Train Size: ",len(train_loader),"\n","Val Size: ",len(val_loader))
+
+    obs, action = dataset[13]    
     # Plot image observations
     fig, (ax1, ax2) = plt.subplots(1, 2)
     img_idx = -22
-    imgs = [item for key,item in obs.items()][0]
-    ax1.imshow(np.transpose(imgs[img_idx,:3,:,:],(1,2,0)))
-    ax2.imshow(np.transpose(imgs[img_idx,3:,:,:],(1,2,0)))
+    imgs = obs["rgb"]
+    ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
+    ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
     plt.show()
-    # print("Action: ", action.shape)
     
     # Sequence load time benchmark
-    dl = iter(dataloader)
+    dl = iter(train_loader)
     t0 = time.time()
-    for i in range(10):
+    for i in range(1):
         next(dl)
     tf = time.time()
-    print("Load Time: ",(tf-t0)/10)
+    print("Load Time: ",(tf-t0)/1)
 
     ### Commands for trajectory replay ###
     # python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10

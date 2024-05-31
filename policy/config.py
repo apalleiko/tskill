@@ -3,6 +3,7 @@ import yaml
 from policy import skill
 from policy.perception import scene_vae
 
+# TODO
 method_dict = {
     "scene_vae": scene_vae,
     "skill": skill,

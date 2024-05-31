@@ -7,7 +7,7 @@ from torch.utils import model_zoo
 class CheckpointIO(object):
     ''' CheckpointIO class.
 
-    It handles saving and loading checkpoints.
+    Handles saving and loading checkpoints.
 
     Args:
         checkpoint_dir (str): path where checkpoints are saved
