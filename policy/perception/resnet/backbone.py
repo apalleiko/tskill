@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 """
-Backbone modules.
+Resnet backbone module. Modified from Facebook DETR code.
 """
 from collections import OrderedDict
 
@@ -11,8 +11,7 @@ from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
 from typing import Dict, List
 
-from util.misc import NestedTensor, is_main_process
-
+from .util.misc import NestedTensor, is_main_process
 from .position_encoding import build_position_encoding
 
 import IPython
@@ -74,13 +73,6 @@ class BackboneBase(nn.Module):
     def forward(self, tensor):
         xs = self.body(tensor)
         return xs
-        # out: Dict[str, NestedTensor] = {}
-        # for name, x in xs.items():
-        #     m = tensor_list.mask
-        #     assert m is not None
-        #     mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
-        #     out[name] = NestedTensor(x, mask)
-        # return out
 
 
 class Backbone(BackboneBase):
@@ -110,13 +102,3 @@ class Joiner(nn.Sequential):
             pos.append(self[1](x).to(x.dtype))
 
         return out, pos
-
-
-def build_backbone(args):
-    position_embedding = build_position_encoding(args)
-    train_backbone = args.lr_backbone > 0
-    return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
-    model = Joiner(backbone, position_embedding)
-    model.num_channels = backbone.num_channels
-    return model

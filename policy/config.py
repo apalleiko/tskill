@@ -1,11 +1,11 @@
 import yaml
 
 from policy import skill
-from policy.perception import scene_vae
+from policy.perception import resnet
 
 # TODO
 method_dict = {
-    "scene_vae": scene_vae,
+    "scene_vae": resnet,
     "skill": skill,
 }
 
@@ -85,17 +85,3 @@ def get_trainer(model, optimizer, cfg, device):
     method = cfg["method"]
     trainer = method_dict[method].config.get_trainer(model, optimizer, cfg, device)
     return trainer
-
-
-# Generator for final mesh extraction
-def get_generator(model, cfg, device):
-    """Returns a generator instance.
-
-    Args:
-        model (nn.Module): the model which is used
-        cfg (dict): config dictionary
-        device (device): pytorch device
-    """
-    method = cfg["method"]
-    generator = method_dict[method].config.get_generator(model, cfg, device)
-    return generator

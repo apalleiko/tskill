@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from .models import build_skill_model
+from .skill_vae import build as build_skill_model
 
 import IPython
 e = IPython.embed

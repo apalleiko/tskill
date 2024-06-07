@@ -1,20 +1,43 @@
 method: skill
 data:
-  dataset: skill
-  train_split: train
-  val_split: val
-  test_split: test
-  dim: 3
-  padding: 0.0
-  type: geom
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.json
+  val_split: 0.1
+  test_split: 0.1
+  preshuffle: True
+  max_seq_len: 200
+
 model:
-  action_dim: 26
-  state_dim: 128
-  latent_dim: 128
+  state_dim : 9
+  action_dim : 8
+  max_skill_len : 10
+  z_dim : 32
+  hidden_dim: 256
+  
+  encoder:  
+    dropout : 0.1
+    nheads : 8
+    dim_feedforward : 1024 
+    enc_layers : 4 
+    dec_layers : 6 
+    pre_norm : False  
+  
+  decoder:
+    dropout : 0.1 
+    nheads : 8 
+    dim_feedforward : 1024 
+    enc_layers : 4 
+    dec_layers : 6 
+    pre_norm : False 
+  
+  backbone:
+    position_embedding: sine 
+    backbone_name: resnet18 
+    lr_backbone: 0.0001  
+    masks: False 
+    dilation: False 
 
-  state_encoder_kwargs:
-    ckpt_file: None
-
+loss:
+  kl_weights: 1
 
 training:
   out_dir: out/default

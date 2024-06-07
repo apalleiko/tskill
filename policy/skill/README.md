@@ -1,4 +1,4 @@
-This part of the codebase is modified from DETR https://github.com/facebookresearch/detr under APACHE 2.0 and from Learning Fine-Grained Bimanual Manipulation withLow-Cost Hardware  https://github.com/tonyzhaozh/aloha
+This part of the codebase is modified from DETR https://github.com/facebookresearch/detr under APACHE 2.0 and from Learning Fine-Grained Bimanual Manipulation with Low-Cost Hardware  https://github.com/tonyzhaozh/aloha under MIT License
 
     @article{Carion2020EndtoEndOD,
       title={End-to-End Object Detection with Transformers},

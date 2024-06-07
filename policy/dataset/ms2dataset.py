@@ -11,7 +11,6 @@ from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.common import flatten_state_dict
 import h5py
 
-
 def tensor_to_numpy(x):
     # moves all tensors to numpy. This is just for SB3 as SB3 does not optimize for observations stored on the GPU.
     if th.is_tensor(x):
@@ -19,7 +18,7 @@ def tensor_to_numpy(x):
     return x
 
 
-def convert_observation(observation, robot_state_only):
+def convert_observation(observation, robot_state_only, pos_only=True):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
 
@@ -32,7 +31,15 @@ def convert_observation(observation, robot_state_only):
 
     # we provide a simple tool to flatten dictionaries with state data
     if robot_state_only:
-        state = flatten_state_dict(observation["agent"])
+        if pos_only:
+            state = observation["agent"]["qpos"]
+        else:
+            state = np.hstack(
+            [
+                flatten_state_dict(observation["agent"]["qpos"]),
+                flatten_state_dict(observation["agent"]["qvel"]),
+            ]
+        )
     else:
         state = np.hstack(
             [
@@ -184,7 +191,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
         
         # permute data so that channels are the first dimension as PyTorch expects this
-        # (seq, num_cams, channels, img_w, img_h)
+        # (seq, num_cams, channels, img_h, img_w)
         rgb = th.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))
         state = th.from_numpy(obs["state"][:-1]).float()
 
@@ -202,19 +209,24 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             act_pad = np.zeros([pad] + list(action.shape[1:]))
             # act_mask = np.concatenate((np.zeros_like(action), np.ones_like(act_pad)), axis=0).astype(np.bool_)
             
-            rgb = np.concatenate((rgb, rgb_pad), axis=0)
-            action = np.concatenate((action, act_pad), axis=0)
-            state = np.concatenate((state, state_pad), axis=0)
+            rgb = np.concatenate((rgb, rgb_pad), axis=0, dtype=np.float32)
+            actions = np.concatenate((action, act_pad), axis=0, dtype=np.float32)
+            state = np.concatenate((state, state_pad), axis=0, dtype=np.float32)
         else:
             # rgb_mask = None
             # act_mask = None
             seq_mask = None
 
-        return dict(rgb=rgb, state=state, seq_mask=seq_mask), action
+        return dict(rgb=rgb, state=state, seq_mask=seq_mask, actions=actions)
     
 
-def get_MS_loaders(cfg, dataset_file: str, val_split: float = 0.1, preshuffle: bool = True, **kwargs) -> None:
-        assert osp.exists(path)
+def get_MS_loaders(cfg,  **kwargs) -> None:
+        cfg_data = cfg["data"]
+        dataset_file: str = cfg_data.get("dataset")
+        val_split: float = cfg_data.get("val_split", 0.1)
+        preshuffle: bool = cfg_data.get("preshuffle", True)
+
+        assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
@@ -222,8 +234,8 @@ def get_MS_loaders(cfg, dataset_file: str, val_split: float = 0.1, preshuffle: b
         num_episodes = len(episodes)
 
         # If a max sequence length isn't passed, need to find it from the data
-        # This is needed to pads sequences and allow batching
-        max_seq_len = kwargs.get("max_seq_len", 0)
+        # This is needed to pad sequences and allow batching
+        max_seq_len = cfg_data.get("max_seq_len", 0)
         if not max_seq_len:
             for idx in tqdm(range(num_episodes)):
                 eps = episodes[idx]
@@ -232,7 +244,7 @@ def get_MS_loaders(cfg, dataset_file: str, val_split: float = 0.1, preshuffle: b
                 seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
                 if seq_size > max_seq_len:
                     max_seq_len = seq_size
-            print("Max Sequence Length: ",max_seq_len)
+            print("Max Sequence Length: ", max_seq_len)
 
         indices = list(range(num_episodes))
         if preshuffle:
