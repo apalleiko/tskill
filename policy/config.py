@@ -3,9 +3,9 @@ import yaml
 from policy import skill
 from policy.perception import resnet
 
-# TODO
+
 method_dict = {
-    "scene_vae": resnet,
+    "resnet": resnet,
     "skill": skill,
 }
 

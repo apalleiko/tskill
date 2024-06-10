@@ -1,4 +1,6 @@
 data/
+wandb/
+out/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

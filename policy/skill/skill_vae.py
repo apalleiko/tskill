@@ -67,7 +67,7 @@ class TSkillCVAE(nn.Module):
         self.enc_action_proj = nn.Linear(action_dim, self.hidden_dim) # project action to hidden
         self.enc_state_proj = nn.Linear(state_dim, self.hidden_dim)  # project qpos to hidden
         # self.enc_image_proj = nn.LazyLinear(1) # project image vector from (seq, bs, c, m) to (seq, bs, c, 1) TODO Try with transformer or MLP instead?
-        self.enc_image_proj = nn.Linear(32,1)
+        self.enc_image_proj = nn.Linear(32,1) #TODO Hardcoded
         # self.enc_image_proj = nn.Sequential([nn.Flatten(-2), nn.LazyLinear(self.hidden_dim)])
 
         # learned embeddings for the 3 encoder input types (action, state, image)
@@ -83,6 +83,8 @@ class TSkillCVAE(nn.Module):
 
         # learned embeddings for the 3 decoder input types (proprio, skill, image)
         self.dec_inputs_pe = nn.Embedding(3, self.hidden_dim) 
+
+        self.to(self._device)
 
 
     def image_encode(self, image):
@@ -108,7 +110,7 @@ class TSkillCVAE(nn.Module):
         return feat, pos
     
 
-    def image_seq_encode(self, images):
+    def image_seq_encode(self, images): #TODO put this in resnet code
         img_seq_features = []
         img_seq_pos = []
 
@@ -287,7 +289,8 @@ class TSkillCVAE(nn.Module):
                                       skill_pad_mask,
                                       seq_pad_mask)
 
-        return a_hat, [mu, logvar]
+        a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
+        return dict(a_hat=a_hat, mu=mu, logvar=logvar)
     
 
     def to(self, device):
