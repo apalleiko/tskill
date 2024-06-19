@@ -130,7 +130,9 @@ class TSkillCVAE(nn.Module):
         return img_src, img_pe
         
 
-    def forward_encode(self, qpos, actions, img_info, max_num_skills, src_pad_mask=None, tgt_pad_mask=None):
+    def forward_encode(self, qpos, actions, img_info, max_num_skills, 
+                       src_pad_mask=None, tgt_pad_mask=None, 
+                       src_mask=None, tgt_mask=None):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         is_training = actions is not None # train or val
         bs, seq, _ = qpos.shape # Use bs for masking
@@ -160,24 +162,28 @@ class TSkillCVAE(nn.Module):
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
             enc_src_pe = enc_src_pe.repeat(3, bs, 1)  # (3*seq, bs, hidden_dim)
 
-            # query encoder model
+            # encoder target
             enc_tgt = torch.zeros(max_num_skills, bs, self.hidden_dim).to(self._device)
             enc_tgt_pe = self.get_pos_table(max_num_skills).permute(1, 0, 2).repeat(1, bs, 1)
 
             # TODO Keep causal mask? + enable combining with other masks
-            causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills).to(self._device)
+            # causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills).to(self._device)
 
             # Repeat same padding mask for new seq length (same pattern)
             src_pad_mask = src_pad_mask.repeat(1,3) 
+            
+            # rehsape src_mask and tgt_mask
+            # TODO
 
+            # query encoder model
             enc_output = self.encoder(src=enc_src + enc_src_pe, 
                                           src_key_padding_mask=src_pad_mask, 
                                           src_is_causal=False,
                                           src_mask = None,
                                           tgt=enc_tgt + enc_tgt_pe,
                                           tgt_key_padding_mask=tgt_pad_mask,
-                                          tgt_is_causal=True,
-                                          tgt_mask = causal_mask,
+                                          tgt_is_causal=False,
+                                          tgt_mask = None,
                                           memory_is_causal=False) # (skill_seq, bs, hidden_dim)
 
             latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
@@ -191,7 +197,9 @@ class TSkillCVAE(nn.Module):
         return mu, logvar, latent_sample
 
 
-    def skill_decode(self, z_sample, qpos, img_info, src_pad_mask=None, tgt_pad_mask=None):
+    def skill_decode(self, z_sample, qpos, img_info, 
+                     src_pad_mask=None, tgt_pad_mask=None, 
+                     src_mask=None, tgt_mask=None):
         """Decode a sequence of skills into actions based on current image state and robot position
         Currently is not autoregressive and has fixed skill mapping size"""
         img_src, img_pe = img_info
@@ -237,7 +245,7 @@ class TSkillCVAE(nn.Module):
                           tgt=dec_tgt + dec_tgt_pe,
                           tgt_key_padding_mask=tgt_pad_mask,
                           tgt_is_causal=False, # Right now, generate entire action sequence at once
-                          tgt_mask=None, #TODO
+                          tgt_mask=None,
                           memory_is_causal=False) # (seq, bs, hidden_dim)
 
         a_hat = self.dec_action_proj(dec_output)
@@ -248,15 +256,21 @@ class TSkillCVAE(nn.Module):
     def forward(self, data, **kwargs):
         """
         data:
-            qpos: batch, seq, qpos_dim
-            images: batch, seq, num_cam, channel, height, width
-            actions: batch, seq, action_dim
+            qpos: bs, seq, qpos_dim
+            images: bs, seq, num_cam, channel, height, width
+            actions: bs, seq, action_dim
             seq_pad_mask: Padding mask for input sequence (bs, seq)
+            skill_pad_mask: Padding mask for skill sequence (bs, max_num_skills)
+            seq_mask: bs, seq, seq
+            skill_mask: bs, max_num_skills, max_num_skills
         """
         qpos = data["state"].to(self._device)
         images = data["rgb"].to(self._device)
         actions = data["actions"].to(self._device)
-        seq_pad_mask = data["seq_mask"].to(self._device)
+        seq_pad_mask = data["seq_pad_mask"].to(self._device)
+        skill_pad_mask = data["skill_pad_mask"].to(self._device)
+        seq_mask = None # TODO data["seq_mask"][0,:,:].to(self._device)
+        skill_mask = None # data["skill_mask"][0,:,:].to(self._device)
 
         bs, seq, _ = qpos.shape
 
@@ -266,31 +280,22 @@ class TSkillCVAE(nn.Module):
         else:
             raise NotImplementedError # TODO, precalculate all image features?
 
-        max_num_skills = int(seq / self.max_skill_len) # Sequence input needs to be divisible by skill_len for now
+        max_num_skills = skill_pad_mask.shape[1] # TODO Sequence input needs to be divisible by skill_len for now
+        mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), max_num_skills, 
+                                            seq_pad_mask, skill_pad_mask, seq_mask, skill_mask)
         
-        # Infer skill mask from input sequence mask
-        num_unpad_seq = torch.sum(torch.logical_not(seq_pad_mask.to(torch.int16)), dim=1)
-        num_unpad_skills = torch.ceil(num_unpad_seq / self.max_skill_len) # number of skills with relevant outputs TODO handle non divisible skill lengths
-        skill_pad_mask = torch.zeros(bs, max_num_skills) # True is unattended
-        for b in range(bs):
-            skill_pad_mask[b,num_unpad_skills[b].to(torch.int16):] = 1
-        skill_pad_mask = skill_pad_mask.to(torch.bool).to(self._device)
-
-        mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), max_num_skills, seq_pad_mask, skill_pad_mask)
-        
-        # Decode skills conditioned with state & image from sequence start
-        run_subseq = kwargs.get("run_subseq", False)
-        if run_subseq: # TODO Decode skills for subsequences of the predictions for training
-            pass
+        # Decode skills conditioned with state & image from sequence start ("current" state)
+        run_subseq = kwargs.get("run_subseq", None)
+        if run_subseq is not None: # TODO Decode skills for subsequences of the predictions for training
+            raise NotImplementedError
         else:
-            a_hat = self.skill_decode(z, 
-                                      qpos[:,0,:], 
-                                      (img_src[0,...], img_pe[0,...]),
-                                      skill_pad_mask,
-                                      seq_pad_mask)
+            a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
+                                      skill_pad_mask, seq_pad_mask, skill_mask, seq_mask)
 
-        a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
-        return dict(a_hat=a_hat, mu=mu, logvar=logvar)
+            a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
+            mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
+            logvar = logvar.permute(1,0,2)
+            return dict(a_hat=a_hat, mu=mu, logvar=logvar)
     
 
     def to(self, device):

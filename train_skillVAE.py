@@ -17,7 +17,7 @@ from policy.dataset.ms2dataset import get_MS_loaders
 from policy.skill.training import Trainer
 
 matplotlib.use("Agg")
-
+torch.backends.cuda.matmul.allow_tf32 = True
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -141,6 +141,7 @@ def main(args):
 
     # Dataset
     train_loader, val_loader = get_MS_loaders(cfg)
+    print("Train Size: ",len(train_loader),"\n","Val Size: ",len(val_loader))
 
     # Model
     model = config.get_model(cfg, device=device)
@@ -201,9 +202,11 @@ def main(args):
 
         for batch in train_loader:
             it += 1
-            losses = trainer.train_step(batch)
+            
+            losses, met = trainer.train_step(batch)
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
+            metrics.update({f"train/metrics/{k}": v for k, v in met.items()})
             wandb.log(metrics)
 
             # Print output
@@ -241,7 +244,7 @@ def main(args):
 
             # Run validation
             if validate_every > 0 and (it % validate_every) == 0:
-                eval_dict = trainer.evaluate(val_loader)
+                eval_dict, eval_metric_dict = trainer.evaluate(val_loader)
                 metric_val = eval_dict[model_selection_metric]
                 print(
                     "Validation metric (%s): %.4f"
@@ -249,6 +252,7 @@ def main(args):
                 )
 
                 metrics = {f"val/{k}": v for k, v in eval_dict.items()}
+                metrics.update({f"val/metrics/{k}": v for k, v in eval_metric_dict.items()})
                 wandb.log(metrics)
 
                 if model_selection_sign * (metric_val - metric_val_best) > 0:

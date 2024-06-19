@@ -2,7 +2,7 @@
 import os.path as osp
 import h5py
 import numpy as np
-import torch as th
+import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 import matplotlib.pylab as plt
@@ -13,7 +13,7 @@ import h5py
 
 def tensor_to_numpy(x):
     # moves all tensors to numpy. This is just for SB3 as SB3 does not optimize for observations stored on the GPU.
-    if th.is_tensor(x):
+    if torch.is_tensor(x):
         return x.cpu().numpy()
     return x
 
@@ -109,6 +109,7 @@ class ManiSkillDataset(Dataset):
     def __getitem__(self, idx):
         raise(NotImplementedError)
 
+
 class ManiSkillrgbdDataset(ManiSkillDataset):
     def __init__(self, dataset_file: str, load_count=-1) -> None:
         self.dataset_file = dataset_file
@@ -140,14 +141,14 @@ class ManiSkillrgbdDataset(ManiSkillDataset):
         return len(self.obs_rgbd)
 
     def __getitem__(self, idx):
-        action = th.from_numpy(self.actions[idx]).float()
+        action = torch.from_numpy(self.actions[idx]).float()
         rgbd = self.obs_rgbd[idx]
         # note that we rescale data on demand as opposed to storing the rescaled data directly
         # so we can save a ton of space at the cost of a little extra compute
         rgbd = rescale_rgbd(rgbd)
         # permute data so that channels are the first dimension as PyTorch expects this
-        rgbd = th.from_numpy(rgbd).float().permute((2, 0, 1))
-        state = th.from_numpy(self.obs_state[idx]).float()
+        rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
+        state = torch.from_numpy(self.obs_state[idx]).float()
         return dict(rgbd=rgbd, state=state), action
     
 
@@ -159,7 +160,9 @@ class ManiSkillstateDataset(ManiSkillDataset):
 class ManiSkillrgbSeqDataset(ManiSkillDataset):
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
-    def __init__(self, dataset_file: str, indices: list, max_seq_len: int = 0, pad=True) -> None:
+    def __init__(self, dataset_file: str, indices: list, 
+                 max_seq_len: int = 0, max_skill_len: int = 10, 
+                 pad: bool =True, augmentation=None) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -169,8 +172,12 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.env_id = self.env_info["env_id"]
         self.env_kwargs = self.env_info["env_kwargs"]
         self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
+        
         self.max_seq_len = max_seq_len
+        self.max_skill_len = max_skill_len
+        self.max_num_skills = int(max_seq_len/max_skill_len)
         self.pad = pad
+        self.augmentation = augmentation
 
     def __len__(self):
         return len(self.owned_indices)
@@ -185,39 +192,51 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
-        action = th.from_numpy(trajectory["actions"]).float()
+        action = torch.from_numpy(trajectory["actions"]).float()
         rgbd = obs["rgbd"][:-1]
-
         rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
         
         # permute data so that channels are the first dimension as PyTorch expects this
         # (seq, num_cams, channels, img_h, img_w)
-        rgb = th.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))
-        state = th.from_numpy(obs["state"][:-1]).float()
+        rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))
+        state = torch.from_numpy(obs["state"][:-1]).float()
 
         # Add padding to sequences to match max possible length and generate padding masks
         if self.pad:
-            pad = self.max_seq_len - rgb.shape[0]
-            seq_mask = np.concatenate((np.zeros(rgb.shape[0]), np.ones(pad)), axis=0).astype(np.bool_)
+            num_unpad_seq = rgb.shape[0]
+            pad = self.max_seq_len - num_unpad_seq
+            seq_pad_mask = torch.cat((torch.zeros(rgb.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
 
-            rgb_pad = np.zeros([pad] + list(rgb.shape[1:]))
-            # rgb_mask = np.concatenate((np.zeros_like(rgb), np.ones_like(rgb_pad)), axis=0).astype(np.bool_)
-
-            state_pad = np.zeros([pad] + list(state.shape[1:]))
-            # state_mask = np.concatenate((np.zeros_like(state), np.ones_like(state_pad)), axis=0).astype(np.bool_)
+            rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
+            state_pad = torch.zeros([pad] + list(state.shape[1:]))
+            act_pad = torch.zeros([pad] + list(action.shape[1:]))
             
-            act_pad = np.zeros([pad] + list(action.shape[1:]))
-            # act_mask = np.concatenate((np.zeros_like(action), np.ones_like(act_pad)), axis=0).astype(np.bool_)
-            
-            rgb = np.concatenate((rgb, rgb_pad), axis=0, dtype=np.float32)
-            actions = np.concatenate((action, act_pad), axis=0, dtype=np.float32)
-            state = np.concatenate((state, state_pad), axis=0, dtype=np.float32)
-        else:
-            # rgb_mask = None
-            # act_mask = None
-            seq_mask = None
+            rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
+            actions = torch.cat((action, act_pad), axis=0).to(torch.float32)
+            state = torch.cat((state, state_pad), axis=0).to(torch.float32)
 
-        return dict(rgb=rgb, state=state, seq_mask=seq_mask, actions=actions)
+            # TODO Keep this here? Infer skill padding mask from input sequence mask
+            num_unpad_skills = torch.ceil(torch.tensor(num_unpad_seq / self.max_skill_len)) # get skills with relevant outputs TODO handle non divisible skill lengths
+            skill_pad_mask = torch.zeros(self.max_num_skills) # True is unattended
+            skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
+            skill_pad_mask = skill_pad_mask.to(torch.bool)
+        else: # This will raise an error if being batched
+            seq_pad_mask = None
+            skill_pad_mask = None
+
+        # Assume no masking
+        seq_mask = torch.zeros(self.max_seq_len, self.max_seq_len).to(torch.bool)
+        skill_mask = torch.zeros(self.max_num_skills, self.max_num_skills).to(torch.bool)
+
+        data = dict(rgb=rgb, state=state, 
+                    seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask, 
+                    seq_mask=seq_mask, skill_mask=skill_mask,
+                    actions=actions)
+        
+        if self.augmentation is not None:
+            data = self.augmentation(data)
+
+        return data
     
 
 def get_MS_loaders(cfg,  **kwargs) -> None:
@@ -225,6 +244,8 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         dataset_file: str = cfg_data.get("dataset")
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
+        augment: bool = cfg["data"].get("augment", False)
+        max_skill_len = cfg["model"]["max_skill_len"]
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
@@ -247,53 +268,103 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             print("Max Sequence Length: ", max_seq_len)
 
         indices = list(range(num_episodes))
+        # Shuffle the index list for train/val split
         if preshuffle:
             np.random.shuffle(indices)
 
+        # Train/Val split
         split_idx = int(np.floor(num_episodes*val_split))
         train_idx = indices[:num_episodes-split_idx]
         val_idx = indices[num_episodes-split_idx:]
 
-        train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, max_seq_len)
-        val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, max_seq_len)
+        # Apply augmentations
+        if augment:
+            train_augmentation = DataAugmentation(cfg)
+            if cfg["data"]["augmentation"].get("val_augmentation",False):
+                val_augmentation = train_augmentation
+            else:
+                val_augmentation = None
+        else:
+            train_augmentation = None
+            val_augmentation = None
 
+        # Create datasets
+        train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, 
+                                               max_seq_len, max_skill_len,
+                                               True, train_augmentation)
+        val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
+                                             max_seq_len, max_skill_len,
+                                             True, val_augmentation)
+
+        # Create loaders
         train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
                                    num_workers=cfg["training"]["n_workers"], 
-                                   pin_memory=True, drop_last=True, shuffle=True)
+                                   pin_memory=True, drop_last=False, shuffle=True)
         val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
                                  num_workers=cfg["training"]["n_workers_val"], 
-                                 pin_memory=True, drop_last=True, shuffle=True)
+                                 pin_memory=True, drop_last=False, shuffle=True)
         
         return train_loader, val_loader
 
 
+class DataAugmentation:
+    def __init__(self, cfg) -> None:
+        self.max_seq_len = cfg["data"]["max_seq_len"]
+        self.max_skill_len = cfg["model"]["max_skill_len"]
+        self.masking_rate = cfg["data"]["augmentation"].get("masking_rate", 0)
+        self.subsequence_rate = cfg["data"]["augmentation"].get("subsequence_rate", 0)
+
+    def __call__(self, data):
+        seq_pad_mask = data["seq_pad_mask"]
+        num_unpad_seq = torch.sum(torch.logical_not(seq_pad_mask).to(torch.int16))
+
+        val = torch.rand(1)
+        if self.subsequence_rate > val and self.subsequence_rate > 0:
+            # Uniformly sample how much of the sequence to use for the batch
+            # from 1 to entire (unpadded) seq
+            num_seq = torch.randint(1, num_unpad_seq+1, (1,1)).squeeze()
+
+            # Pick a random index to start at in the possible window
+            # TODO Start at least max_skill_len away from the end of each demo in the batch?
+            # As is, it is biased towards smaller sequences
+            buffer = self.max_seq_len - num_unpad_seq
+            seq_idx_start = torch.randint(0, buffer+1, (1,1)).squeeze()
+            seq_idx_end = seq_idx_start + num_seq
+            
+            # Reset "new" sequences to the beginning (for positional encodings)
+            for k,v in data.items():
+                if k not in ("skill_pad_mask", "skill_mask", "seq_pad_mask"):
+                    new_seq = torch.zeros_like(v)
+                    new_seq[:num_seq,...] = v[seq_idx_start:seq_idx_end,...]
+                    data[k] = new_seq
+
+            # Recalculate appropriate masking 
+            # (also start from the begining of the seq)
+            num_unpad_skills = torch.ceil(torch.clone(num_seq / self.max_skill_len)).to(torch.int16)
+            data["skill_pad_mask"][num_unpad_skills:] = True
+            data["seq_pad_mask"][num_seq:] = True
+
+        if self.masking_rate > 0:
+            raise NotImplementedError # TODO
+
+        return data
+
+
 if __name__ == "__main__":
     path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-    cfg = {"training": {"batch_size": 5, "batch_size_val": 5,
-                        "n_workers": 0, "n_workers_val": 0}}
 
     dataset = ManiSkillrgbSeqDataset(path, None, pad=False)
     print("Length of Dataset: ",len(dataset))
-    
-    train_loader, val_loader = get_MS_loaders(cfg, path, preshuffle=False, max_seq_len=200)
-    print("Train Size: ",len(train_loader),"\n","Val Size: ",len(val_loader))
 
-    obs, action = dataset[13]    
-    # Plot image observations
-    fig, (ax1, ax2) = plt.subplots(1, 2)
-    img_idx = -22
-    imgs = obs["rgb"]
-    ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
-    ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
-    plt.show()
-    
-    # Sequence load time benchmark
-    dl = iter(train_loader)
-    t0 = time.time()
-    for i in range(1):
-        next(dl)
-    tf = time.time()
-    print("Load Time: ",(tf-t0)/1)
+    # obs, action = dataset[13]    
+    # # Plot image observations
+    # fig, (ax1, ax2) = plt.subplots(1, 2)
+    # img_idx = -22
+    # imgs = obs["rgb"]
+    # ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
+    # ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
+    # plt.show()
+
 
     ### Commands for trajectory replay ###
     # python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10
