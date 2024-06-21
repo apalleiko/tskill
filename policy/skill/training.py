@@ -53,6 +53,7 @@ class Trainer(BaseTrainer):
         loss_dict = _dict
 
         loss.backward()
+
         self.optimizer.step()
         self.step_it += 1
 
@@ -115,7 +116,7 @@ class Trainer(BaseTrainer):
         loss_dict["kldiv_loss"] = self.kl_weights * normal_kl(dist, None).sum() / num_dist
 
         # Set target and pred actions to 0 for padded sequence outputs
-        a_hat = a_hat * action_loss_mask 
+        a_hat = a_hat * action_loss_mask
         a_targ = a_targ * action_loss_mask
 
         loss_dict["act_loss"] = F.mse_loss(a_hat, a_targ, reduction="sum") / num_actions
@@ -130,5 +131,8 @@ class Trainer(BaseTrainer):
         for i in [1,5,10,20,50,100,150]:
             metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
             metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
+
+        metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
+        metric_dict["batch_mean_std"] = torch.sum((logvar / 2).exp() * kl_loss_mask) / num_dist
 
         return loss_dict, metric_dict

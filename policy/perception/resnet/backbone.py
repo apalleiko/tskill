@@ -102,3 +102,56 @@ class Joiner(nn.Sequential):
             pos.append(self[1](x).to(x.dtype))
 
         return out, pos
+    
+
+class ResnetStateEncoder(nn.Module):
+    def __init__(self, joiner, hidden_dim, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.backbone = joiner
+        self.num_channels = joiner.num_channels
+        self.hidden_dim = hidden_dim
+        self.image_proj = nn.Conv2d(self.num_channels, self.hidden_dim, kernel_size=1)
+    
+
+    def forward(self, images):
+        """Get image observation features and position embeddings
+        - images: (bs, seq num_cam, channel, h, w)"""
+        img_seq_features = []
+        img_seq_pos = []
+
+        for t in range(images.shape[1]):
+            t_feat, t_pos = self.image_encode(images[:, t, ...])
+            img_seq_features.append(t_feat)
+            img_seq_pos.append(t_pos)
+
+        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, c, h*num_cam*w)
+        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, c, h*num_cam*w)
+
+        seq, bs, c, hw = img_src.shape
+        img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, h*num_cam*w, c) TODO Is this the right feature order?
+        img_pe = img_pos.permute(0, 1, 3, 2).repeat(1, bs, 1, 1)
+        
+        return img_src, img_pe
+
+
+    def image_encode(self, image):
+        # Image observation features and position embeddings
+        # Images are (bs, num_cam, channel, h, w)
+        all_cam_features = []
+        all_cam_pos = []
+        for cam in range(image.shape[1]):
+            features, pos = self.backbone(image[:, cam, ...])
+            features = features[0] # take the last layer feature (bs, c, h, w)
+            pos = pos[0]
+            all_cam_features.append(self.image_proj(features))
+            all_cam_pos.append(pos)
+
+            # fold camera dimension into width dimension
+            feat = torch.cat(all_cam_features, axis=3) # (bs, hidden, h, num_cam*w)
+            pos = torch.cat(all_cam_pos, axis=3) 
+
+        # flatten
+        feat = feat.flatten(2) # (bs, hidden, h*num_cam*w)
+        pos = pos.flatten(2) # (1, hidden, h*num_cam*w)
+        
+        return feat, pos        

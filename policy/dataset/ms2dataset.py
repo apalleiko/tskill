@@ -162,7 +162,8 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
     for each episode"""
     def __init__(self, dataset_file: str, indices: list, 
                  max_seq_len: int = 0, max_skill_len: int = 10, 
-                 pad: bool =True, augmentation=None) -> None:
+                 pad: bool =True, augmentation=None,
+                 action_scaling=1) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -178,6 +179,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.max_num_skills = int(max_seq_len/max_skill_len)
         self.pad = pad
         self.augmentation = augmentation
+        self.action_scaling = action_scaling
 
     def __len__(self):
         return len(self.owned_indices)
@@ -212,7 +214,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             act_pad = torch.zeros([pad] + list(action.shape[1:]))
             
             rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
-            actions = torch.cat((action, act_pad), axis=0).to(torch.float32)
+            actions = torch.cat((action, act_pad), axis=0).to(torch.float32) * self.action_scaling
             state = torch.cat((state, state_pad), axis=0).to(torch.float32)
 
             # TODO Keep this here? Infer skill padding mask from input sequence mask
@@ -288,13 +290,18 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_augmentation = None
             val_augmentation = None
 
+        # Scale actions
+        action_scaling = cfg_data.get("action_scaling",1)
+
         # Create datasets
         train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, 
                                                max_seq_len, max_skill_len,
-                                               True, train_augmentation)
+                                               True, train_augmentation,
+                                               action_scaling)
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
                                              max_seq_len, max_skill_len,
-                                             True, val_augmentation)
+                                             True, val_augmentation,
+                                             action_scaling)
 
         # Create loaders
         train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 

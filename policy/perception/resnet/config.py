@@ -1,4 +1,4 @@
-from .backbone import Backbone, Joiner
+from .backbone import Backbone, Joiner, ResnetStateEncoder
 from .position_encoding import build_position_encoding
 
 def freeze_network(network):
@@ -10,9 +10,10 @@ def get_model(cfg, device=None):
     position_embedding = build_position_encoding(cfg)
     return_interm_layers = cfg["masks"]
     backbone = Backbone(cfg["backbone_name"], False, return_interm_layers, cfg["dilation"])
-    model = Joiner(backbone, position_embedding).float()
-    model.num_channels = backbone.num_channels
-    model.to(device)
+    joiner = Joiner(backbone, position_embedding).float()
+    joiner.num_channels = backbone.num_channels
+    joiner.to(device)
+    model = ResnetStateEncoder(joiner, cfg["hidden_dim"])
 
     return model
 

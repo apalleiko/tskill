@@ -11,6 +11,8 @@ import torch
 import wandb
 import yaml
 
+from torch.utils.tensorboard import SummaryWriter
+
 from policy import config
 from policy.checkpoints import CheckpointIO
 from policy.dataset.ms2dataset import get_MS_loaders
@@ -92,15 +94,17 @@ def main(args):
         out_dir = args.out_dir
     else:
         out_dir = cfg["training"]["out_dir"]
-    print(f"output dir: {out_dir}")
+    
+    # Tensorboard summary writer
+    writer = SummaryWriter(out_dir)
 
     if args.debug:
-        cfg["training"]["batch_size"] = 2
-        cfg["training"]["visualize_every"] = 1
+        cfg["training"]["batch_size"] = 1
+        cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
-        cfg["training"]["backup_every"] = 1
-        cfg["training"]["validate_every"] = 1
-        cfg["training"]["checkpoint_every"] = 1
+        cfg["training"]["backup_every"] = 100
+        cfg["training"]["validate_every"] = 100
+        cfg["training"]["checkpoint_every"] = 100
         cfg["training"]["visualize_total"] = 1
         cfg["training"]["max_it"] = 1
 
@@ -147,13 +151,17 @@ def main(args):
     model = config.get_model(cfg, device=device)
     print(model)
 
-    # Intialize training #TODO replace backbone
-    param_dicts = [{"params": [p for n, p in model.named_parameters() if "backbone" not in n and p.requires_grad]}]
+    # Intialize training
+    param_dicts = [{"params": [p for n, p in model.named_parameters() if "stt_encoder" not in n and p.requires_grad]}]
     if cfg["training"]["lr_state_encoder"] > 0:
         param_dicts.append({
-            "params": [p for n, p in model.named_parameters() if "backbone" in n and p.requires_grad],
+            "params": [p for n, p in model.named_parameters() if "stt_encoder" in n and p.requires_grad],
             "lr": cfg["training"]["lr_state_encoder"],
         })
+
+    n_p = 0
+    for d in param_dicts:
+        n_p += sum([p.numel() for p in d["params"]])
 
     optimizer = torch.optim.AdamW(param_dicts, lr=lr,
                                   weight_decay=weight_decay)    
@@ -190,6 +198,8 @@ def main(args):
     # Print model
     nparameters = sum(p.numel() for p in model.parameters())
     n_trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    assert n_trainable_parameters == n_p, "Number of trainable params does not match param dicts"
+
     print("Number of trainable parameters: %.2fM" % (n_trainable_parameters/1e6,))
     print("Number of total parameters: %.2fM" % (nparameters/1e6,))
     print("output path: ", cfg["training"]["out_dir"])
@@ -204,6 +214,17 @@ def main(args):
             it += 1
             
             losses, met = trainer.train_step(batch)
+
+            if args.debug:
+                trace_batch = dict()
+                for k,v in batch.items():
+                    if "skill" not in k:
+                        trace_batch[k] = v[:,:5,...]
+                    else:
+                        trace_batch[k] = v[:,0:1,...]
+
+                writer.add_graph(model, batch, use_strict_trace=False)
+                writer.close()
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
             metrics.update({f"train/metrics/{k}": v for k, v in met.items()})

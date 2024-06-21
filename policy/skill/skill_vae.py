@@ -28,10 +28,10 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class TSkillCVAE(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
-    def __init__(self, backbone, encoder, decoder, state_dim, action_dim, max_skill_len, z_dim, device, **kwargs):
+    def __init__(self, stt_encoder, encoder, decoder, state_dim, action_dim, max_skill_len, z_dim, device, **kwargs):
         """ Initializes the model.
         Parameters:
-            backbone: torch module of the backbone to be used. See backbone.py
+            stt_encoder: torch module of the state encoder to be used. See perception
             encoder: transformer encoder module
             decoder: transformer decoder module
             state_dim: robot state dimension. Size of input robot position (delta_pos)
@@ -60,8 +60,7 @@ class TSkillCVAE(nn.Module):
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
 
         ### Backbone
-        self.image_proj = nn.Conv2d(backbone.num_channels, self.hidden_dim, kernel_size=1)
-        self.backbone = backbone
+        self.stt_encoder = stt_encoder
 
         ### Encoder TODO add batch norms to projs?
         self.enc_action_proj = nn.Linear(action_dim, self.hidden_dim) # project action to hidden
@@ -85,49 +84,6 @@ class TSkillCVAE(nn.Module):
         self.dec_inputs_pe = nn.Embedding(3, self.hidden_dim) 
 
         self.to(self._device)
-
-
-    def image_encode(self, image):
-        # Image observation features and position embeddings
-        # Images are (bs, num_cam, channel, h, w)
-        all_cam_features = []
-        all_cam_pos = []
-        for cam in range(image.shape[1]):
-            features, pos = self.backbone(image[:, cam, ...])
-            features = features[0] # take the last layer feature (bs, c, h, w)
-            pos = pos[0]
-            all_cam_features.append(self.image_proj(features))
-            all_cam_pos.append(pos)
-
-            # fold camera dimension into width dimension
-            feat = torch.cat(all_cam_features, axis=3) # (bs, c, h, num_cam*w)
-            pos = torch.cat(all_cam_pos, axis=3) 
-
-        # flatten
-        feat = feat.flatten(2) # (bs, c, h*num_cam*w)
-        pos = pos.flatten(2) # (1, c, h*num_cam*w)
-        
-        return feat, pos
-    
-
-    def image_seq_encode(self, images): #TODO put this in resnet code
-        img_seq_features = []
-        img_seq_pos = []
-
-        # Images are (bs, seq, num_cam, channel, h, w)
-        for t in range(images.shape[1]):
-            t_feat, t_pos = self.image_encode(images[:, t, ...])
-            img_seq_features.append(t_feat)
-            img_seq_pos.append(t_pos)
-
-        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, c, h*num_cam*w)
-        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, c, h*num_cam*w)
-
-        seq, bs, c, hw = img_src.shape
-        img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, h*num_cam*w, c)
-        img_pe = img_pos.permute(0, 1, 3, 2).repeat(1, bs, 1, 1)
-        
-        return img_src, img_pe
         
 
     def forward_encode(self, qpos, actions, img_info, max_num_skills, 
@@ -274,13 +230,10 @@ class TSkillCVAE(nn.Module):
 
         bs, seq, _ = qpos.shape
 
-        run_backbone = kwargs.get("run_backbone",True)
-        if run_backbone:
-            img_src, img_pe = self.image_seq_encode(images)
-        else:
-            raise NotImplementedError # TODO, precalculate all image features?
+        # Calculate image features
+        img_src, img_pe = self.stt_encoder(images) # (seq, bs, h*num_cam*w, c)
 
-        max_num_skills = skill_pad_mask.shape[1] # TODO Sequence input needs to be divisible by skill_len for now
+        max_num_skills = skill_pad_mask.shape[1]
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), max_num_skills, 
                                             seq_pad_mask, skill_pad_mask, seq_mask, skill_mask)
         
