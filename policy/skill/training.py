@@ -117,13 +117,13 @@ class Trainer(BaseTrainer):
 
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat = a_hat * action_loss_mask
-        a_targ = a_targ * action_loss_mask
-
         loss_dict["act_loss"] = F.mse_loss(a_hat, a_targ, reduction="sum") / num_actions
 
+        # Compute some metrics
         metric_dict["batch_mean_seq_len"] = num_actions / bs / act_dim
         mean_targ_acts = torch.sum(a_targ, (0,1))/torch.sum(action_loss_mask, (0,1))
         mean_pred_acts = torch.sum(a_hat, (0,1))/torch.sum(action_loss_mask, (0,1))
+        
         for i in range(act_dim):
             metric_dict[f"batch_mean_targ_acts_{i}"] = mean_targ_acts[i]
             metric_dict[f"batch_mean_pred_acts_{i}"] = mean_pred_acts[i]
@@ -134,5 +134,8 @@ class Trainer(BaseTrainer):
 
         metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
         metric_dict["batch_mean_std"] = torch.sum((logvar / 2).exp() * kl_loss_mask) / num_dist
+        
+        for k,v in self.model.metrics.items():
+            metric_dict[k] = v
 
         return loss_dict, metric_dict

@@ -1,4 +1,5 @@
 # Import required packages
+import os
 import os.path as osp
 import h5py
 import numpy as np
@@ -10,6 +11,8 @@ import time
 from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.common import flatten_state_dict
 import h5py
+import pickle
+
 
 def tensor_to_numpy(x):
     # moves all tensors to numpy. This is just for SB3 as SB3 does not optimize for observations stored on the GPU.
@@ -194,7 +197,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
-        action = torch.from_numpy(trajectory["actions"]).float()
+        actions = self.action_scaling(torch.from_numpy(trajectory["actions"]).float())
         rgbd = obs["rgbd"][:-1]
         rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
         
@@ -211,10 +214,10 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
 
             rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
             state_pad = torch.zeros([pad] + list(state.shape[1:]))
-            act_pad = torch.zeros([pad] + list(action.shape[1:]))
+            act_pad = torch.zeros([pad] + list(actions.shape[1:]))
             
             rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
-            actions = torch.cat((action, act_pad), axis=0).to(torch.float32) * self.action_scaling
+            actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
             state = torch.cat((state, state_pad), axis=0).to(torch.float32)
 
             # TODO Keep this here? Infer skill padding mask from input sequence mask
@@ -222,13 +225,14 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             skill_pad_mask = torch.zeros(self.max_num_skills) # True is unattended
             skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
             skill_pad_mask = skill_pad_mask.to(torch.bool)
-        else: # This will raise an error if being batched
-            seq_pad_mask = None
-            skill_pad_mask = None
-
-        # Assume no masking
-        seq_mask = torch.zeros(self.max_seq_len, self.max_seq_len).to(torch.bool)
-        skill_mask = torch.zeros(self.max_num_skills, self.max_num_skills).to(torch.bool)
+        else: # If not padding, this is being passed directly to model. 
+            seq_pad_mask = torch.zeros(rgb.shape[0]).to(torch.bool)
+            num_unpad_skills = torch.ceil(torch.tensor(rgb.shape[0] / self.max_skill_len)).to(torch.int16)
+            skill_pad_mask = torch.zeros(num_unpad_skills).to(torch.bool)
+            
+        # Assume no masking for now
+        seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
+        skill_mask = torch.zeros(skill_pad_mask.shape[-1], skill_pad_mask.shape[-1]).to(torch.bool)
 
         data = dict(rgb=rgb, state=state, 
                     seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask, 
@@ -238,28 +242,38 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         if self.augmentation is not None:
             data = self.augmentation(data)
 
+        if not self.pad: # Add extra dimension for "batch", so model runs properly when testing.
+            for k,v in data.items():
+                data[k] = v.unsqueeze(0)
+
         return data
     
 
 def get_MS_loaders(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
-        dataset_file: str = cfg_data.get("dataset")
+        dataset_file: str = cfg_data["dataset"]
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
-        augment: bool = cfg["data"].get("augment", False)
-        max_skill_len = cfg["model"]["max_skill_len"]
+        augment: bool = cfg["data"].get("augment", False) # Augmentation
+        max_skill_len = cfg["model"]["max_skill_len"] # Max skill length
+        count = cfg_data.get("max_count",None) # Dataset count limitations
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
         episodes = json_data["episodes"]
+        
+        # Limit number of loaded episodes if needed
         num_episodes = len(episodes)
+        if count is not None:
+            assert count <= num_episodes
+            num_episodes = count
 
-        # If a max sequence length isn't passed, need to find it from the data
-        # This is needed to pad sequences and allow batching
+        # If a max sequence length isn't passed need to find it from the data to allow batching
         max_seq_len = cfg_data.get("max_seq_len", 0)
         if not max_seq_len:
+            print("Computing max sequence length...")
             for idx in tqdm(range(num_episodes)):
                 eps = episodes[idx]
                 trajectory = data[f"traj_{eps['episode_id']}"]
@@ -269,15 +283,66 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                     max_seq_len = seq_size
             print("Max Sequence Length: ", max_seq_len)
 
-        indices = list(range(num_episodes))
-        # Shuffle the index list for train/val split
-        if preshuffle:
-            np.random.shuffle(indices)
+        # Scale actions, or compute action normalization for the dataset
+        action_scaling = cfg_data.get("action_scaling",1)
+        if action_scaling=="norm": 
+            all_acts = []
+            print("Computing action norm")
+            for idx in tqdm(range(num_episodes)):
+                eps = episodes[idx]
+                trajectory = data[f"traj_{eps['episode_id']}"]
+                trajectory = load_h5_data(trajectory)
+                actions = torch.from_numpy(trajectory["actions"]).float()
+                all_acts.append(actions)
+            all_acts = torch.vstack(all_acts)
+            act_mu = torch.mean(all_acts, 0)
+            act_std = torch.std(all_acts, 0)
+            print("Action mean: ", act_mu)
+            print("Action std: ", act_std)
+            print(torch.nonzero(all_acts).shape[0])
+            action_scaling = lambda x: (x - act_mu) / torch.sqrt(act_std)
 
-        # Train/Val split
-        split_idx = int(np.floor(num_episodes*val_split))
-        train_idx = indices[:num_episodes-split_idx]
-        val_idx = indices[num_episodes-split_idx:]
+            # Save action scaling values to pickle file
+            path = os.path.join(cfg["training"]["out_dir"],'action_norm_stats.pickle')            
+            if os.path.exists(path):
+                print("Replacing existing action norm file")
+                with open(path,'wb') as f:
+                    pickle.dump((act_mu, act_std), f)
+            else:
+                print("Creating new action norm file")
+                with open(path,'xb') as f:
+                    pickle.dump((act_mu, act_std), f)
+        elif isinstance(action_scaling, (int, float)):
+            action_scaling = lambda x: action_scaling*x
+        else:
+            raise ValueError(f"Unsupported action scaling given: {action_scaling}")
+
+        # Try loading exiting train/val split indices
+        existing_indices = kwargs.get("indices", None)
+        if existing_indices is None:
+            indices = list(range(num_episodes))
+            
+            # Shuffle the index list for train/val split
+            if preshuffle:
+                np.random.shuffle(indices)
+
+            # Train/Val split
+            split_idx = int(np.floor(num_episodes*val_split))
+            train_idx = indices[:num_episodes-split_idx]
+            val_idx = indices[num_episodes-split_idx:]
+            path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
+            
+            # Save index split to pickle file
+            if os.path.exists(path):
+                print("Replacing existing train/val index file")
+                with open(path,'wb') as f:
+                    pickle.dump((train_idx, val_idx), f)
+            else:
+                print("Creating new train/val index file")
+                with open(path,'xb') as f:
+                    pickle.dump((train_idx, val_idx), f)
+        else:
+            train_idx, val_idx = existing_indices
 
         # Apply augmentations
         if augment:
@@ -290,18 +355,22 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_augmentation = None
             val_augmentation = None
 
-        # Scale actions
-        action_scaling = cfg_data.get("action_scaling",1)
+        # Get padding config
+        pad_train = cfg_data.get("pad_train", True)
+        pad_val = cfg_data.get("pad_val", True)
 
         # Create datasets
         train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, 
                                                max_seq_len, max_skill_len,
-                                               True, train_augmentation,
+                                               pad_train, train_augmentation,
                                                action_scaling)
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
                                              max_seq_len, max_skill_len,
-                                             True, val_augmentation,
+                                             pad_val, val_augmentation,
                                              action_scaling)
+
+        if kwargs.get("return_datasets", False):
+            return train_dataset, val_dataset
 
         # Create loaders
         train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 

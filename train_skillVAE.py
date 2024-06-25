@@ -95,9 +95,6 @@ def main(args):
     else:
         out_dir = cfg["training"]["out_dir"]
     
-    # Tensorboard summary writer
-    writer = SummaryWriter(out_dir)
-
     if args.debug:
         cfg["training"]["batch_size"] = 1
         cfg["training"]["visualize_every"] = 100
@@ -111,8 +108,9 @@ def main(args):
     lr = cfg["training"].get("lr", 1e-3)
     weight_decay = cfg["training"].get("weight_decay", 1e-4)
 
+    # Initialize WANDB
     project_name = "tskill"
-    run_name = "peg_test"
+    run_name = "peg_test_batchnormed"
     if args.bootstrap:
         project_name += "-bootstrapping"
     wandb.init(
@@ -166,6 +164,10 @@ def main(args):
     optimizer = torch.optim.AdamW(param_dicts, lr=lr,
                                   weight_decay=weight_decay)    
     
+    lr_decay = cfg["training"].get("lr_decay",1)
+    if lr_decay < 1:
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
+    
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device)
     checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
 
@@ -194,6 +196,7 @@ def main(args):
     print_every = cfg["training"]["print_every"]
     checkpoint_every = cfg["training"]["checkpoint_every"]
     validate_every = cfg["training"]["validate_every"]
+    visualize_every = cfg["training"]["visualize_every"]
 
     # Print model
     nparameters = sum(p.numel() for p in model.parameters())
@@ -203,6 +206,8 @@ def main(args):
     print("Number of trainable parameters: %.2fM" % (n_trainable_parameters/1e6,))
     print("Number of total parameters: %.2fM" % (nparameters/1e6,))
     print("output path: ", cfg["training"]["out_dir"])
+
+    writer = SummaryWriter(out_dir)
 
     # Set t0
     t0 = time.time()
@@ -215,16 +220,15 @@ def main(args):
             
             losses, met = trainer.train_step(batch)
 
-            if args.debug:
-                trace_batch = dict()
-                for k,v in batch.items():
-                    if "skill" not in k:
-                        trace_batch[k] = v[:,:5,...]
-                    else:
-                        trace_batch[k] = v[:,0:1,...]
-
-                writer.add_graph(model, batch, use_strict_trace=False)
-                writer.close()
+            # Tensorboard model graph
+            # if args.debug:
+            #     trace_batch = dict()
+            #     for k,v in batch.items():
+            #         if "skill" not in k:
+            #             trace_batch[k] = v[:,:5,...]
+            #         else:
+            #             trace_batch[k] = v[:,0:1,...]
+            #     writer.add_graph(model, batch, use_strict_trace=False)
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
             metrics.update({f"train/metrics/{k}": v for k, v in met.items()})
@@ -286,12 +290,21 @@ def main(args):
                         loss_val_best=metric_val_best,
                     )
 
-            if args.debug:
-                exit(0)
+            # Plot gradient histograms
+            if visualize_every > 0 and (it % visualize_every) == 0:
+                for name, param in model.named_parameters():
+                    if param.grad is not None:
+                        writer.add_histogram(f'{name}', param, epoch_it)
+                        writer.add_histogram(f'{name}.grad', param.grad, epoch_it)
 
-            # Exit if necessary
+        # Exit if necessary
         if trainer.step_it >= max_it:
+            writer.close()
             exit(0)
+        
+        # Step scheduler each epoch
+        if lr_decay:
+            scheduler.step()
 
 
 if __name__ == "__main__":

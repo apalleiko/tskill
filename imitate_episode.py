@@ -9,13 +9,16 @@ import multiprocessing as mp
 import os
 from copy import deepcopy
 from typing import Union
+import pickle
 
 import gymnasium as gym
 import h5py
 import numpy as np
 import sapien.core as sapien
+import torch
 from tqdm.auto import tqdm
 from transforms3d.quaternions import quat2axangle
+import matplotlib.pyplot as plt
 
 import mani_skill2.envs
 from mani_skill2.agents.base_controller import CombinedController
@@ -26,6 +29,9 @@ from mani_skill2.utils.common import clip_and_scale_action, inv_scale_action
 from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.sapien_utils import get_entity_by_name
 from mani_skill2.utils.wrappers import RecordEpisode
+
+from policy import config
+from policy.dataset.ms2dataset import get_MS_loaders
 
 
 def qpos_to_pd_joint_delta_pos(controller: PDJointPosController, qpos):
@@ -287,7 +293,7 @@ def from_pd_joint_delta_pos(
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--traj-path", type=str, required=True)
+    parser.add_argument("--model-dir", type=str, required=True)
     parser.add_argument("-o", "--obs-mode", type=str, help="target observation mode")
     parser.add_argument(
         "-c", "--target-control-mode", type=str, help="target control mode"
@@ -331,10 +337,31 @@ def parse_args(args=None):
 
 
 def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
+    
+    cfg_path = os.path.join(args.model_dir, "config.yaml")
+    cfg = config.load_config(cfg_path, None)
+    
+    index_path = os.path.join(args.model_dir, "train_val_indices.pickle")
+    with open(index_path, 'rb') as f:
+        train_idx, val_idx = pickle.load(f)
+
+    # Dataset
+    cfg["data"]["pad_train"] = False
+    cfg["data"]["pad_val"] = False
+    cfg["data"]["augment"] = False
+    train_dataset, val_dataset = get_MS_loaders(cfg, 
+                                                indices=(train_idx, val_idx),
+                                                return_datasets=True
+                                                )
+
+    # Model
+    model = config.get_model(cfg, device=None)
+    print(model)
+
     pbar = tqdm(position=proc_id, leave=None, unit="step", dynamic_ncols=True)
 
     # Load HDF5 containing trajectories
-    traj_path = args.traj_path
+    traj_path = cfg["data"]["dataset_file"]
     ori_h5_file = h5py.File(traj_path, "r")
 
     # Load associated json
@@ -373,7 +400,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         )
 
     # Prepare for recording
-    output_dir = os.path.dirname(traj_path)
+    output_dir = args.model_dir
     ori_traj_name = os.path.splitext(os.path.basename(traj_path))[0]
     suffix = "{}.{}".format(env.obs_mode, env.control_mode)
     new_traj_name = ori_traj_name + "." + suffix
@@ -394,13 +421,16 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     else:
         output_h5_path = None
 
-    episodes = json_data["episodes"][: args.count]
+    episodes = json_data["episodes"]
     n_ep = len(episodes)
     inds = np.arange(n_ep)
     inds = np.array_split(inds, num_procs)[proc_id]
 
+    idxs = val_idx[: args.count]
+    # idxs = train_idx[: args.count]
     # Replay
-    for ind in inds:
+    for i in range(len(idxs)):
+        ind = idxs[i]
         ep = episodes[ind]
         episode_id = ep["episode_id"]
         traj_id = f"traj_{episode_id}"
@@ -429,14 +459,33 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 env.render_human()
 
             # Original actions to replay
-            ori_actions = ori_h5_file[traj_id]["actions"][:]
+            data = val_dataset[i]
+            # data = train_dataset[i]
+            with torch.no_grad():
+                out = model(data)
+            true_actions = ori_h5_file[traj_id]["actions"][:]
+            a_hat = out["a_hat"] / cfg["data"]["action_scaling"]
+            # a_hat = data["actions"] / cfg["data"]["action_scaling"]
+            a_hat = a_hat.detach().cpu().squeeze().numpy()
+            ori_actions = []
+            for i in range(a_hat.shape[0]):
+                ori_actions.append(a_hat[i,:])
 
-            # Original env states to replay
-            if args.use_env_states:
-                ori_env_states = ori_h5_file[traj_id]["env_states"][1:]
+            # Plot image observations
+            # fig, (ax1, ax2) = plt.subplots(1, 2)
+            # img_idx = 55
+            # imgs = data["rgb"]
+            # ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
+            # ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
+            # plt.show()
+            # input()
+            # assert 1==0
 
             info = {}
-
+            num_unpad_seq = torch.sum(torch.logical_not(data["seq_pad_mask"]).to(torch.int16))
+            t0 = len(true_actions) - num_unpad_seq
+            ori_env_state = ori_h5_file[traj_id]["env_states"][1+t0]
+            env.set_state(ori_env_state)
             # Without conversion between control modes
             if target_control_mode is None:
                 n = len(ori_actions)
@@ -448,8 +497,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     _, _, _, _, info = env.step(a)
                     if args.vis:
                         env.render_human()
-                    if args.use_env_states:
-                        env.set_state(ori_env_states[t])
 
             # From joint position to others
             elif ori_control_mode == "pd_joint_pos":
