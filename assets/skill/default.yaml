@@ -1,11 +1,12 @@
 method: skill
-notes: Lower lr decay.
+notes: None
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
-  val_split: 0.2
+  val_split: 0.1
   preshuffle: True
   max_seq_len: 200
-  action_scaling: norm
+  action_scaling: normal
+  state_scaling: uniform
   augment: False
   augmentation:
     subsequence_rate: 1
@@ -47,7 +48,7 @@ loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/test
+  out_dir: out/PegInsertion/test2
   max_it: 20000
   batch_size: 4
   batch_size_val: 4

@@ -63,6 +63,11 @@ def get_args():
         action="store_true",
     )
 
+    parser.add_argument(
+        "--log_inputs",
+        action="store_true",
+    )
+
     args = parser.parse_args()
     return args
 
@@ -208,6 +213,7 @@ def main(args):
     print("output path: ", cfg["training"]["out_dir"])
 
     writer = SummaryWriter(out_dir)
+    ep = 0
 
     # Set t0
     t0 = time.time()
@@ -217,6 +223,21 @@ def main(args):
 
         for batch in train_loader:
             it += 1
+
+            if it == 1 and args.log_inputs:
+                acts = batch["actions"]
+                qpos = batch["state"]
+                bs, seq, act_dim = acts.shape
+                for b in range(bs):
+                    for i in range(seq):
+                        acts_i = acts[b,i,:]
+                        qpos_i = qpos[b,i,:]
+                        if torch.nonzero(acts_i).shape[0] > 0:
+                            writer.add_histogram(f'ep_{ep*b + b}_all_acts', acts_i, i)
+                            writer.add_histogram(f'ep_{ep*b + b}_all_qpos', qpos_i, i)
+                        else:
+                            continue
+                ep += 1
             
             losses, met = trainer.train_step(batch)
 
