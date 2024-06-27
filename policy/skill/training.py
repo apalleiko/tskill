@@ -43,7 +43,7 @@ class Trainer(BaseTrainer):
         self.model.train()
         self.optimizer.zero_grad()
         loss_dict, metric_dict = self.compute_loss(data)
-        metric_dict = {k: v.item() for k, v in metric_dict.items()}
+        metric_dict = {k: v for k, v in metric_dict.items()}
 
         loss = 0.0
         _dict = {}
@@ -52,6 +52,7 @@ class Trainer(BaseTrainer):
             _dict[k] = v.item()
         loss_dict = _dict
 
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
         loss.backward()
 
         self.optimizer.step()
@@ -83,7 +84,7 @@ class Trainer(BaseTrainer):
         with torch.no_grad():
             loss_dict, metric_dict = self.compute_loss(data)
         loss_dict = {k: v.item() for k, v in loss_dict.items()}
-        metric_dict = {k: v.item() for k, v in metric_dict.items()}
+        metric_dict = {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
         return loss_dict, metric_dict
 
     def compute_loss(self, data):
@@ -128,9 +129,10 @@ class Trainer(BaseTrainer):
             metric_dict[f"batch_mean_targ_acts_{i}"] = mean_targ_acts[i]
             metric_dict[f"batch_mean_pred_acts_{i}"] = mean_pred_acts[i]
 
-        for i in [1,5,10,20,50,100,150]:
-            metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
-            metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
+        for i in [1,5,10,20,50,100,150]: # TODO GRIPPER FIX
+            metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:], a_targ[:,:i,:], reduction="sum") / torch.sum(action_loss_mask[:,:i,:])
+            # metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
+            # metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
 
         metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
         metric_dict["batch_mean_std"] = torch.sum((logvar / 2).exp() * kl_loss_mask) / num_dist

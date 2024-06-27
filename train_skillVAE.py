@@ -115,7 +115,7 @@ def main(args):
 
     # Initialize WANDB
     project_name = "tskill"
-    run_name = "peg_test_batchnormed"
+    run_name = "peg_insertion"
     if args.bootstrap:
         project_name += "-bootstrapping"
     wandb.init(
@@ -170,8 +170,10 @@ def main(args):
                                   weight_decay=weight_decay)    
     
     lr_decay = cfg["training"].get("lr_decay",1)
-    if lr_decay < 1:
+    if lr_decay < 1 and lr_decay!=0:
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
+    else:
+        scheduler = None
     
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device)
     checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
@@ -212,32 +214,18 @@ def main(args):
     print("Number of total parameters: %.2fM" % (nparameters/1e6,))
     print("output path: ", cfg["training"]["out_dir"])
 
-    writer = SummaryWriter(out_dir)
-    ep = 0
-
+    tb_out_dir = os.path.join(out_dir, "tb_logs")
+    if not os.path.exists(tb_out_dir):
+        os.makedirs(tb_out_dir)
+    
     # Set t0
     t0 = time.time()
     while True:
         epoch_it += 1
         trainer.epoch_step()
-
+        ep = 0
         for batch in train_loader:
             it += 1
-
-            if it == 1 and args.log_inputs:
-                acts = batch["actions"]
-                qpos = batch["state"]
-                bs, seq, act_dim = acts.shape
-                for b in range(bs):
-                    for i in range(seq):
-                        acts_i = acts[b,i,:]
-                        qpos_i = qpos[b,i,:]
-                        if torch.nonzero(acts_i).shape[0] > 0:
-                            writer.add_histogram(f'ep_{ep*b + b}_all_acts', acts_i, i)
-                            writer.add_histogram(f'ep_{ep*b + b}_all_qpos', qpos_i, i)
-                        else:
-                            continue
-                ep += 1
             
             losses, met = trainer.train_step(batch)
 
@@ -252,8 +240,26 @@ def main(args):
             #     writer.add_graph(model, batch, use_strict_trace=False)
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
-            metrics.update({f"train/metrics/{k}": v for k, v in met.items()})
+            metrics.update({f"train/metrics/{k}": v.item() for k, v in met.items() if "vector" not in k})
             wandb.log(metrics)
+            
+            # Log tensorboard histograms
+            if it == 1 and args.log_inputs:
+                writer = SummaryWriter(tb_out_dir)
+                acts = batch["actions"]
+                qpos = batch["state"]
+                bs, seq, act_dim = acts.shape
+                for b in range(bs):
+                    for i in range(seq):
+                        acts_i = acts[b,i,:]
+                        qpos_i = qpos[b,i,:]
+                        if torch.nonzero(acts_i).shape[0] > 0:
+                            writer.add_histogram(f'ep_{ep*b + b}_all_acts', acts_i, i)
+                            writer.add_histogram(f'ep_{ep*b + b}_all_qpos', qpos_i, i)
+                        else:
+                            continue
+                ep += 1
+                writer.close()
 
             # Print output
             if (it % print_every) == 0:
@@ -313,18 +319,22 @@ def main(args):
 
             # Plot gradient histograms
             if visualize_every > 0 and (it % visualize_every) == 0:
+                writer = SummaryWriter(tb_out_dir)
                 for name, param in model.named_parameters():
                     if param.grad is not None:
                         writer.add_histogram(f'{name}', param, epoch_it)
                         writer.add_histogram(f'{name}.grad', param.grad, epoch_it)
+                for k,v in met.items():
+                    if "vector" in k:
+                        writer.add_histogram(f'{k}', v, it)
+                writer.close()
 
-        # Exit if necessary
-        if trainer.step_it >= max_it:
-            writer.close()
-            exit(0)
+            # Exit if necessary
+            if trainer.step_it >= max_it:
+                exit(0)
         
         # Step scheduler each epoch
-        if lr_decay:
+        if scheduler:
             scheduler.step()
 
 

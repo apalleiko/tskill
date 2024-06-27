@@ -208,8 +208,8 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         obs = convert_observation(trajectory["obs"], robot_state_only=True)
         
         # we use :-1 to ignore the last obs as terminal observations are included
-        # and they don't have actions
-        actions = self.action_scaling(torch.from_numpy(trajectory["actions"]).float())
+        # and they don't have actions # TODO GRIPPER FIX
+        actions = self.action_scaling(torch.from_numpy(trajectory["actions"][:,:-1]).float())
         assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1]).float())
 
@@ -292,7 +292,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
                 if seq_size > max_seq_len:
                     max_seq_len = seq_size
-            print("Max Sequence Length: ", max_seq_len)
+            print("Max sequence length found to be: ", max_seq_len)
 
         # Scale actions, or compute action normalization for the dataset
         action_scaling = cfg_data.get("action_scaling",1)
@@ -300,6 +300,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         gripper_scaling = cfg_data.get("gripper_scaling", None)
 
         print("Collecting all actions and states...")
+        print("IGNORING GRIPPER ACTIONS!!")
         all_acts = []
         all_states = []
         for idx in tqdm(range(num_episodes)):
@@ -307,7 +308,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             trajectory = data[f"traj_{eps['episode_id']}"]
             trajectory = load_h5_data(trajectory)
             obs = convert_observation(trajectory["obs"], robot_state_only=True)
-            actions = torch.from_numpy(trajectory["actions"]).float()
+            actions = torch.from_numpy(trajectory["actions"][:,:-1]).float() # TODO GRIPPER FIX
             states = torch.from_numpy(obs["state"][:-1]).float()
             all_acts.append(actions)
             all_states.append(states)
@@ -321,19 +322,30 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             all_acts = all_acts[:,:-1]
             sep_idx = -1
 
-        action_scaling_forward, action_scaling_inverse = get_scaling_functions(all_acts, action_scaling, sep_idx)
-        state_scaling_forward, state_scaling_inverse = get_scaling_functions(all_states, state_scaling, None)
-
-        # Save action scaling values to pickle file
-        path = os.path.join(cfg["training"]["out_dir"],'action_scaling.pickle')            
-        if os.path.exists(path):
-            print("Replacing existing action scaling file")
-            with open(path,'wb') as f:
-                pickle.dump((action_scaling_forward, action_scaling_inverse), f)
+        path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
+        if action_scaling=="file":
+            raise NotImplementedError
+            assert os.path.exists(path)
+            print("loading existing scaling file")
+            with open(path,'rb') as f:
+                action_scaling_fcns, state_scaling_fcns = pickle.load(f)
+            action_scaling_forward, action_scaling_inverse = action_scaling_fcns[0], action_scaling_fcns[1]
+            state_scaling_forward, state_scaling_inverse = state_scaling_fcns[0], state_scaling_fcns[1]
         else:
-            print("Creating new action scaling file")
-            with open(path,'xb') as f:
-                pickle.dump((action_scaling_forward, action_scaling_inverse), f)
+            action_scaling_forward, action_scaling_inverse = get_scaling_functions(all_acts, action_scaling, sep_idx)
+            state_scaling_forward, state_scaling_inverse = get_scaling_functions(all_states, state_scaling, None)
+
+            # # Save action scaling values to pickle file
+            # if os.path.exists(path):
+            #     print("Replacing existing scaling file")
+            #     with open(path,'wb') as f:
+            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
+            #                     (state_scaling_forward, state_scaling_inverse)], f)
+            # else:
+            #     print("Creating new scaling file")
+            #     with open(path,'xb') as f:
+            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
+            #                     (state_scaling_forward, state_scaling_inverse)], f)
 
         # Try loading exiting train/val split indices
         existing_indices = kwargs.get("indices", None)
@@ -388,11 +400,15 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                                                pad_train, train_augmentation,
                                                action_scaling_forward,
                                                state_scaling_forward)
+        train_dataset.action_scaling_inverse = action_scaling_inverse
+        train_dataset.state_scaling_incerse = state_scaling_inverse
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
                                              max_seq_len, max_skill_len,
                                              pad_val, val_augmentation,
                                              action_scaling_forward,
                                              state_scaling_forward)
+        val_dataset.action_scaling_inverse = action_scaling_inverse
+        val_dataset.state_scaling_incerse = state_scaling_inverse
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset

@@ -333,6 +333,11 @@ def parse_args(args=None):
         default=None,
         help="number of demonstrations to replay before exiting. By default will replay all demonstrations",
     )
+    parser.add_argument(
+        "--train",
+        action="store_true",
+        help="whether to use training dataset of not. By default will use val.",
+    )
     return parser.parse_args(args)
 
 
@@ -353,6 +358,12 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                                                 indices=(train_idx, val_idx),
                                                 return_datasets=True
                                                 )
+    if not args.train:
+        dataset = val_dataset
+        print("Using Validation Dataset")
+    else:
+        dataset = train_dataset
+        print("Using Training Dataset")
 
     # Model
     model = config.get_model(cfg, device=None)
@@ -361,7 +372,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     pbar = tqdm(position=proc_id, leave=None, unit="step", dynamic_ncols=True)
 
     # Load HDF5 containing trajectories
-    traj_path = cfg["data"]["dataset_file"]
+    traj_path = cfg["data"]["dataset"]
     ori_h5_file = h5py.File(traj_path, "r")
 
     # Load associated json
@@ -426,8 +437,10 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     inds = np.arange(n_ep)
     inds = np.array_split(inds, num_procs)[proc_id]
 
-    idxs = val_idx[: args.count]
-    # idxs = train_idx[: args.count]
+    if not args.train:
+        idxs = val_idx[: args.count]
+    else:
+        idxs = train_idx[: args.count]
     # Replay
     for i in range(len(idxs)):
         ind = idxs[i]
@@ -459,17 +472,16 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 env.render_human()
 
             # Original actions to replay
-            data = val_dataset[i]
-            # data = train_dataset[i]
+            data = dataset[i]
             with torch.no_grad():
                 out = model(data)
             true_actions = ori_h5_file[traj_id]["actions"][:]
-            a_hat = out["a_hat"] / cfg["data"]["action_scaling"]
-            # a_hat = data["actions"] / cfg["data"]["action_scaling"]
-            a_hat = a_hat.detach().cpu().squeeze().numpy()
+            a_hat = out["a_hat"].detach().cpu().squeeze()
+            a_hat = dataset.action_scaling_inverse(a_hat)
+            a_hat = a_hat.numpy()
             ori_actions = []
             for i in range(a_hat.shape[0]):
-                ori_actions.append(a_hat[i,:])
+                ori_actions.append(np.hstack((a_hat[i,:],np.array([0])))) # TODO NO GRIPPER
 
             # Plot image observations
             # fig, (ax1, ax2) = plt.subplots(1, 2)
