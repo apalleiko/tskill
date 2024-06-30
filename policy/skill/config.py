@@ -72,6 +72,6 @@ def get_model(cfg, device=None):
     return model
 
 
-def get_trainer(model, optimizer, cfg, device, **kwcfg):
-    trainer = Trainer(cfg, model, optimizer, device=device)
+def get_trainer(model, optimizer, cfg, device, scheduler, **kwcfg):
+    trainer = Trainer(cfg, model, optimizer, device=device, scheduler=scheduler)
     return trainer

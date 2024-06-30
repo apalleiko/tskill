@@ -8,6 +8,7 @@ import argparse
 import multiprocessing as mp
 import os
 from copy import deepcopy
+import shutil
 from typing import Union
 import pickle
 
@@ -16,6 +17,7 @@ import h5py
 import numpy as np
 import sapien.core as sapien
 import torch
+from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 from transforms3d.quaternions import quat2axangle
 import matplotlib.pyplot as plt
@@ -354,6 +356,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["pad_train"] = False
     cfg["data"]["pad_val"] = False
     cfg["data"]["augment"] = False
+    cfg["data"]["action_scaling"] = "file"
+    cfg["data"]["state_scaling"] = "file"
     train_dataset, val_dataset = get_MS_loaders(cfg, 
                                                 indices=(train_idx, val_idx),
                                                 return_datasets=True
@@ -438,9 +442,15 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     inds = np.array_split(inds, num_procs)[proc_id]
 
     if not args.train:
-        idxs = val_idx[: args.count]
+        idxs = val_idx[:args.count]
     else:
-        idxs = train_idx[: args.count]
+        idxs = train_idx[:args.count]
+    
+    tb_out_dir = os.path.join("out/PegInsertion/imitation_logs", "tb_logs")
+    if os.path.exists(tb_out_dir):
+        print(f"Removing existing directory {tb_out_dir}")
+        shutil.rmtree(tb_out_dir, ignore_errors=True)
+    os.makedirs(tb_out_dir, exist_ok=True)
     # Replay
     for i in range(len(idxs)):
         ind = idxs[i]
@@ -477,12 +487,22 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 out = model(data)
             true_actions = ori_h5_file[traj_id]["actions"][:]
             a_hat = out["a_hat"].detach().cpu().squeeze()
-            a_hat = dataset.action_scaling_inverse(a_hat)
+            a_hat = dataset.action_scaling(a_hat, "inverse")
             a_hat = a_hat.numpy()
             ori_actions = []
             for i in range(a_hat.shape[0]):
                 ori_actions.append(np.hstack((a_hat[i,:],np.array([0])))) # TODO NO GRIPPER
 
+
+            writer = SummaryWriter(tb_out_dir)
+            seq,_ = a_hat.shape
+            for i in range(seq):
+                v_i = a_hat[i,:]
+                a_i = true_actions[i,:]
+                if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
+                    writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
+                    writer.add_histogram(f'ep_{ind}_atrue', a_i, i)
+            writer.close()
             # Plot image observations
             # fig, (ax1, ax2) = plt.subplots(1, 2)
             # img_idx = 55

@@ -73,7 +73,7 @@ def get_model(cfg, device=None):
 
 
 # Trainer
-def get_trainer(model, optimizer, cfg, device):
+def get_trainer(model, optimizer, cfg, device, scheduler=None):
     """Returns a trainer instance.
 
     Args:
@@ -81,7 +81,8 @@ def get_trainer(model, optimizer, cfg, device):
         optimizer (optimizer): pytorch optimizer
         cfg (dict): config dictionary
         device (device): pytorch device
+        scheduler: lr scheduler to use
     """
     method = cfg["method"]
-    trainer = method_dict[method].config.get_trainer(model, optimizer, cfg, device)
+    trainer = method_dict[method].config.get_trainer(model, optimizer, cfg, device, scheduler=scheduler)
     return trainer

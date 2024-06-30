@@ -175,7 +175,7 @@ def main(args):
     else:
         scheduler = None
     
-    trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device)
+    trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device, scheduler=scheduler)
     checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
 
     if args.bootstrap:
@@ -223,14 +223,17 @@ def main(args):
     while True:
         epoch_it += 1
         trainer.epoch_step()
-        ep = 0
         for batch in train_loader:
             it += 1
             
             losses, met = trainer.train_step(batch)
+            
+            acts = batch["actions"]
+            ahat = met["ahat_vector_traj"]
 
             # Tensorboard model graph
             # if args.debug:
+            #     writer = SummaryWriter(tb_out_dir)
             #     trace_batch = dict()
             #     for k,v in batch.items():
             #         if "skill" not in k:
@@ -241,10 +244,12 @@ def main(args):
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
             metrics.update({f"train/metrics/{k}": v.item() for k, v in met.items() if "vector" not in k})
+            if scheduler is not None:
+                metrics.update({"train/metrics/lr": scheduler.get_last_lr()[0]})
             wandb.log(metrics)
             
             # Log tensorboard histograms
-            if it == 1 and args.log_inputs:
+            if epoch_it == 1 and args.log_inputs:
                 writer = SummaryWriter(tb_out_dir)
                 acts = batch["actions"]
                 qpos = batch["state"]
@@ -254,8 +259,8 @@ def main(args):
                         acts_i = acts[b,i,:]
                         qpos_i = qpos[b,i,:]
                         if torch.nonzero(acts_i).shape[0] > 0:
-                            writer.add_histogram(f'ep_{ep*b + b}_all_acts', acts_i, i)
-                            writer.add_histogram(f'ep_{ep*b + b}_all_qpos', qpos_i, i)
+                            writer.add_histogram(f'ep_{it*b + b}_all_acts', acts_i, i)
+                            writer.add_histogram(f'ep_{it*b + b}_all_qpos', qpos_i, i)
                         else:
                             continue
                 ep += 1
@@ -319,13 +324,22 @@ def main(args):
 
             # Plot gradient histograms
             if visualize_every > 0 and (it % visualize_every) == 0:
+                acts = batch["actions"]
                 writer = SummaryWriter(tb_out_dir)
                 for name, param in model.named_parameters():
                     if param.grad is not None:
                         writer.add_histogram(f'{name}', param, epoch_it)
                         writer.add_histogram(f'{name}.grad', param.grad, epoch_it)
                 for k,v in met.items():
-                    if "vector" in k:
+                    if "traj" in k:
+                        _,seq,_ = v.shape
+                        for i in range(seq):
+                            v_i = v[0,i,:]
+                            a_i = acts[0,i,:]
+                            if torch.nonzero(a_i).shape[0] > 0:
+                                writer.add_histogram(f'it_{it}_{k}', v_i, i)
+                                writer.add_histogram(f'it_{it}_atrue_vector_traj', a_i, i)
+                    elif "vector" in k:
                         writer.add_histogram(f'{k}', v, it)
                 writer.close()
 
@@ -333,9 +347,6 @@ def main(args):
             if trainer.step_it >= max_it:
                 exit(0)
         
-        # Step scheduler each epoch
-        if scheduler:
-            scheduler.step()
 
 
 if __name__ == "__main__":

@@ -274,88 +274,23 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
         episodes = json_data["episodes"]
-        
-        # Limit number of loaded episodes if needed
-        num_episodes = len(episodes)
-        if count is not None:
-            assert count <= num_episodes
-            num_episodes = count
-
-        # If a max sequence length isn't passed need to find it from the data to allow batching
-        max_seq_len = cfg_data.get("max_seq_len", 0)
-        if not max_seq_len:
-            print("Computing max sequence length...")
-            for idx in tqdm(range(num_episodes)):
-                eps = episodes[idx]
-                trajectory = data[f"traj_{eps['episode_id']}"]
-                trajectory = load_h5_data(trajectory)
-                seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
-                if seq_size > max_seq_len:
-                    max_seq_len = seq_size
-            print("Max sequence length found to be: ", max_seq_len)
-
-        # Scale actions, or compute action normalization for the dataset
-        action_scaling = cfg_data.get("action_scaling",1)
-        state_scaling = cfg_data.get("state_scaling",1)
-        gripper_scaling = cfg_data.get("gripper_scaling", None)
-
-        print("Collecting all actions and states...")
-        print("IGNORING GRIPPER ACTIONS!!")
-        all_acts = []
-        all_states = []
-        for idx in tqdm(range(num_episodes)):
-            eps = episodes[idx]
-            trajectory = data[f"traj_{eps['episode_id']}"]
-            trajectory = load_h5_data(trajectory)
-            obs = convert_observation(trajectory["obs"], robot_state_only=True)
-            actions = torch.from_numpy(trajectory["actions"][:,:-1]).float() # TODO GRIPPER FIX
-            states = torch.from_numpy(obs["state"][:-1]).float()
-            all_acts.append(actions)
-            all_states.append(states)
-        all_acts = torch.vstack(all_acts)
-        all_states = torch.vstack(all_states)
-        
-        sep_idx = None
-        if gripper_scaling is not None:
-            print("computing seperate gripper scaling")
-            gripper_acts = all_acts[:,-1]
-            all_acts = all_acts[:,:-1]
-            sep_idx = -1
-
-        path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
-        if action_scaling=="file":
-            raise NotImplementedError
-            assert os.path.exists(path)
-            print("loading existing scaling file")
-            with open(path,'rb') as f:
-                action_scaling_fcns, state_scaling_fcns = pickle.load(f)
-            action_scaling_forward, action_scaling_inverse = action_scaling_fcns[0], action_scaling_fcns[1]
-            state_scaling_forward, state_scaling_inverse = state_scaling_fcns[0], state_scaling_fcns[1]
-        else:
-            action_scaling_forward, action_scaling_inverse = get_scaling_functions(all_acts, action_scaling, sep_idx)
-            state_scaling_forward, state_scaling_inverse = get_scaling_functions(all_states, state_scaling, None)
-
-            # # Save action scaling values to pickle file
-            # if os.path.exists(path):
-            #     print("Replacing existing scaling file")
-            #     with open(path,'wb') as f:
-            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
-            #                     (state_scaling_forward, state_scaling_inverse)], f)
-            # else:
-            #     print("Creating new scaling file")
-            #     with open(path,'xb') as f:
-            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
-            #                     (state_scaling_forward, state_scaling_inverse)], f)
 
         # Try loading exiting train/val split indices
         existing_indices = kwargs.get("indices", None)
         path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
         if existing_indices is None:
+            num_episodes = len(episodes)
             indices = list(range(num_episodes))
             
             # Shuffle the index list for train/val split
             if preshuffle:
                 np.random.shuffle(indices)
+            
+            # Limit number of loaded episodes if needed
+            if count is not None:
+                assert count <= num_episodes
+                num_episodes = count
+                indices = indices[:num_episodes]
 
             # Train/Val split
             split_idx = int(np.floor(num_episodes*val_split))
@@ -379,6 +314,69 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         else:
             train_idx, val_idx = existing_indices
 
+
+        # If a max sequence length isn't passed need to find it from the data to allow batching
+        max_seq_len = cfg_data.get("max_seq_len", 0)
+        if not max_seq_len:
+            print("Computing max sequence length...")
+            for idx in tqdm(range(num_episodes)):
+                eps = episodes[idx]
+                trajectory = data[f"traj_{eps['episode_id']}"]
+                trajectory = load_h5_data(trajectory)
+                seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
+                if seq_size > max_seq_len:
+                    max_seq_len = seq_size
+            print("Max sequence length found to be: ", max_seq_len)
+
+        # Scale actions, or compute action normalization for the dataset
+        action_scaling = cfg_data.get("action_scaling",1)
+        state_scaling = cfg_data.get("state_scaling",1)
+        gripper_scaling = cfg_data.get("gripper_scaling", None)
+
+        # Create scaling functions
+        path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
+        if action_scaling=="file":
+            assert os.path.exists(path)
+            print("loading existing scaling file")
+            with open(path,'rb') as f:
+                act_scaling, stt_scaling = pickle.load(f)
+        else:
+            print("Collecting all actions and states...")
+            all_acts = []
+            all_states = []
+            for idx in tqdm(range(num_episodes)):
+                eps = episodes[idx]
+                trajectory = data[f"traj_{eps['episode_id']}"]
+                trajectory = load_h5_data(trajectory)
+                obs = convert_observation(trajectory["obs"], robot_state_only=True)
+                actions = torch.from_numpy(trajectory["actions"][:,:-1]).float() # TODO GRIPPER FIX
+                states = torch.from_numpy(obs["state"][:-1]).float()
+                all_acts.append(actions)
+                all_states.append(states)
+            all_acts = torch.vstack(all_acts)
+            all_states = torch.vstack(all_states)
+            
+            sep_idx = None
+            print("IGNORING GRIPPER ACTIONS!!") # TODO GRIPPER FIX
+            if gripper_scaling is not None: # TODO Gripper fix
+                print("computing seperate gripper scaling")
+                gripper_acts = all_acts[:,-1]
+                joint_acts = all_acts[:,:-1]
+                sep_idx = -1
+                act_scaling = ScalingFunction(action_scaling, joint_acts, sep_idx)
+                stt_scaling = ScalingFunction(state_scaling, all_states, None)
+
+            # Save action scaling values to pickle file
+            if os.path.exists(path):
+                print("Replacing existing scaling file")
+                with open(path,'wb') as f:
+                    pickle.dump((act_scaling, stt_scaling), f)
+            else:
+                print("Creating new scaling file")
+                with open(path,'xb') as f:
+                    pickle.dump((act_scaling, stt_scaling), f)
+
+
         # Apply augmentations
         if augment:
             train_augmentation = DataAugmentation(cfg)
@@ -398,17 +396,13 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, 
                                                max_seq_len, max_skill_len,
                                                pad_train, train_augmentation,
-                                               action_scaling_forward,
-                                               state_scaling_forward)
-        train_dataset.action_scaling_inverse = action_scaling_inverse
-        train_dataset.state_scaling_incerse = state_scaling_inverse
+                                               act_scaling,
+                                               stt_scaling)
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
                                              max_seq_len, max_skill_len,
                                              pad_val, val_augmentation,
-                                             action_scaling_forward,
-                                             state_scaling_forward)
-        val_dataset.action_scaling_inverse = action_scaling_inverse
-        val_dataset.state_scaling_incerse = state_scaling_inverse
+                                             act_scaling,
+                                             stt_scaling)
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset
@@ -426,57 +420,55 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         return train_loader, val_loader
 
 
-def get_scaling_functions(data, scaling, sep_idx):
-    if isinstance(scaling, (int, float, list, tuple)):
-        print("Computing linear scaling")
-        def action_scaling(x):
-            return x * torch.tensor(scaling)
-        def action_scaling_inv(x):
-            return x / torch.tensor(scaling)
-    elif scaling=="norm": 
-        print("Computing action norm")
-        act_mu = torch.mean(data, 0)
-        act_std = torch.std(data, 0)
-        def action_scaling(x):
-            return (x - act_mu) / torch.sqrt(act_std)
-        def action_scaling_inv(x):
-            return x * torch.sqrt(act_std) + act_mu
-    elif scaling=="robust_scaler":
-        print("Computing robust scaler")
-        scaler = skp.RobustScaler().fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    elif scaling in ("normal","uniform"):
-        print(f"Computing {scaling} quantile transform")
-        scaler = skp.QuantileTransformer(output_distribution=scaling)
-        scaler.fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    elif scaling=="power":
-        print(f"Computing power transform")
-        scaler = skp.PowerTransformer()
-        scaler.fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    else:
-        raise ValueError(f"Unsupported action scaling given: {scaling}")
+class ScalingFunction():
+    def __init__(self, scaling, data, sep_idx) -> None:
+        if isinstance(scaling, (int, float, list, tuple)):
+            print("Computing linear scaling")
+            self.scaling_for = lambda x: x * torch.tensor(scaling)
+            self.scaling_inv = lambda x: x / torch.tensor(scaling)
+        elif scaling=="norm": 
+            print("Computing action norm")
+            act_mu = torch.mean(data, 0)
+            act_std = torch.std(data, 0)
+            self.scaling_for = lambda x: (x - act_mu) / torch.sqrt(act_std)
+            self.scaling_inv = lambda x: x * torch.sqrt(act_std) + act_mu
+        elif scaling=="robust_scaler":
+            print("Computing robust scaler")
+            scaler = skp.RobustScaler().fit(data)
+            self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
+            self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
+        elif scaling in ("normal","uniform"):
+            print(f"Computing {scaling} quantile transform")
+            scaler = skp.QuantileTransformer(output_distribution=scaling)
+            scaler.fit(data)
+            self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
+            self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
+        elif scaling=="power":
+            print(f"Computing power transform")
+            scaler = skp.PowerTransformer()
+            scaler.fit(data)
+            self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
+            self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
+        else:
+            raise ValueError(f"Unsupported action scaling given: {scaling}")
 
-    if sep_idx is not None:
-        def seperate_scaling(function, x, idx):
-            return torch.hstack((function(x[:,:idx]), x[:,idx:]))
-        scaling_fcn_forward = lambda x: seperate_scaling(action_scaling, x, sep_idx)
-        scaling_fcn_inverse = lambda x: seperate_scaling(action_scaling_inv, x, sep_idx)
-    else:
-        scaling_fcn_forward = action_scaling
-        scaling_fcn_inverse = action_scaling_inv
-
-    return scaling_fcn_forward, scaling_fcn_inverse
+        if sep_idx is not None:
+            self.scaling_fcn_forward = lambda x: self.seperate_scaling(self.scaling_for, 
+                                                                       x, sep_idx)
+            self.scaling_fcn_inverse = lambda x: self.seperate_scaling(self.scaling_inv, 
+                                                                       x, sep_idx)
+        else:
+            self.scaling_fcn_forward = lambda x: self.scaling_for(x)
+            self.scaling_fcn_inverse = lambda x: self.scaling_inv(x)
+    
+    def __call__(self, x, fcn="forward"):
+        if fcn=="forward":
+            return self.scaling_fcn_forward(x)
+        elif fcn=="inverse":
+            return self.scaling_fcn_inverse(x)
+    
+    def seperate_scaling(self, fcn, x, idx):
+        return torch.hstack((fcn(x[:,:idx]), x[:,idx:]))
 
 
 class DataAugmentation:

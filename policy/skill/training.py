@@ -26,22 +26,30 @@ class Trainer(BaseTrainer):
         model: TSkillCVAE,
         optimizer,
         device=None,
+        scheduler=None
     ):
         self.epoch_it = 0
         self.step_it = 0
+        self.zero_grad = True
 
         self.model = model
         self.optimizer = optimizer
         self.device = device
+        self.scheduler = scheduler
 
         self.kl_weights = cfg["loss"]["kl_weights"]
+        self.gradient_accumulation = cfg["training"].get("gradient_accumulation",1)
 
     def epoch_step(self):
+        if self.scheduler is not None and self.epoch_it > 0:
+            self.scheduler.step()
         self.epoch_it += 1
 
     def train_step(self, data):
         self.model.train()
-        self.optimizer.zero_grad()
+        if self.zero_grad:
+            self.optimizer.zero_grad()
+            self.zero_grad = False
         loss_dict, metric_dict = self.compute_loss(data)
         metric_dict = {k: v for k, v in metric_dict.items()}
 
@@ -52,10 +60,13 @@ class Trainer(BaseTrainer):
             _dict[k] = v.item()
         loss_dict = _dict
 
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
+        loss = loss / self.gradient_accumulation
         loss.backward()
+        if (self.step_it + 1) % self.gradient_accumulation == 0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
+            self.optimizer.step()
+            self.zero_grad = True
 
-        self.optimizer.step()
         self.step_it += 1
 
         return loss_dict, metric_dict
@@ -137,6 +148,8 @@ class Trainer(BaseTrainer):
         metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
         metric_dict["batch_mean_std"] = torch.sum((logvar / 2).exp() * kl_loss_mask) / num_dist
         
+        metric_dict["ahat_vector_traj"] = a_hat
+
         for k,v in self.model.metrics.items():
             metric_dict[k] = v
 
