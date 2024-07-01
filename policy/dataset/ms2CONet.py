@@ -131,7 +131,7 @@ class ManiSkillrgbdDataset(ManiSkillDataset):
         rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
         return dict(rgbd=rgbd)
     
-
+# Need to edit/rewrite this for Conv Occ Net - idea: create scene by scene reconstructions using only the RGBD inputs
 def get_MS_loaders(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
