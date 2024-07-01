@@ -422,44 +422,83 @@ class DataAugmentation:
 
 import matplotlib
 import matplotlib.animation as animation
+import open3d as o3d
 
 if __name__ == "__main__":
     path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
 
     dataset = ManiSkillConvONetDataSet(path)
     
-    # Create a figure and axis
-    fig, ax = plt.subplots()
+    animate = False
+    pointcloud = True
 
-    # Generate a series of images
-    images = []
-
-    episode = dataset[0]['rgbd']
-    batch = episode[0]
-    for scene in batch:
-        cam = scene[0]
+    if pointcloud:
+        episode = dataset[0]["rgbd"]
+        batch = episode[0]
+        scene = batch[100]
+        cam = scene[1]
         img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
-        images.append(img)
+        depth_map = tensor_to_numpy(cam[3, :, :])
+        
+        # Intrinsic camera parameters (example values)
+        fx = 100.0  # Focal length in x
+        fy = 100.0  # Focal length in y
+        cx = 64   # Principal point x
+        cy = 64   # Principal point y
 
-    # Initialize the image
-    im = ax.imshow(images[0])
+        # Generate 3D points
+        height, width = depth_map.shape
+        i, j = np.meshgrid(np.arange(width), np.arange(height))
+        z = depth_map
+        x = (j - cx) * z / fx
+        y = (i - cy) * z / fy
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
 
-    # Function to update the image
-    def update(frame):
-        im.set_array(images[frame])
-        return im,
+        # Generate colors
+        colors = img.reshape(-1, 3) / 255.0
 
-    # Create the animation
-    ani = animation.FuncAnimation(
-        fig,        # The figure object
-        update,     # The update function
-        frames=len(images),  # Number of frames
-        interval=100,  # Interval in milliseconds
-        blit=True    # Use blitting to optimize drawing
-    )
+        # Create Open3D point cloud object
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        # pcd.colors = o3d.utility.Vector3dVector(colors)
 
-    # Display the animation
-    plt.show()
+        # Visualize the point cloud
+        o3d.visualization.draw_geometries([pcd])
+    
+
+    if animate:
+        # Create a figure and axis
+        fig, ax = plt.subplots()
+
+        # Generate a series of images
+        images = []
+
+        episode = dataset[0]['rgbd']
+        batch = episode[0]
+        for scene in batch:
+            cam = scene[0]
+            img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
+            images.append(img)
+
+        # Initialize the image
+        im = ax.imshow(images[0])
+
+        # Function to update the image
+        def update(frame):
+            im.set_array(images[frame])
+            return im,
+
+        # Create the animation
+        ani = animation.FuncAnimation(
+            fig,        # The figure object
+            update,     # The update function
+            frames=len(images),  # Number of frames
+            interval=100,  # Interval in milliseconds
+            blit=True    # Use blitting to optimize drawing
+        )
+
+        # Display the animation
+        plt.show()
 
     
 
