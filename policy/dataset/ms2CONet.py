@@ -25,10 +25,8 @@ def tensor_to_numpy(x):
     return x
 
 
-def convert_observation(observation, robot_state_only, pos_only=True):
-    # flattens the original observation by flattening the state dictionaries
-    # and combining the rgb and depth images
-
+def convert_observation(observation):
+    # combines the rgb and depth images
     # image data is not scaled here and is kept as uint16 to save space
     image_obs = observation["image"]
     rgb = image_obs["base_camera"]["rgb"]
@@ -98,38 +96,67 @@ class ManiSkillDataset(Dataset):
         raise(NotImplementedError)
 
 
-class ManiSkillrgbdDataset(ManiSkillDataset):
-    def __init__(self, dataset_file: str, load_count=-1) -> None:
+class ManiSkillConvONetDataSet(ManiSkillDataset):
+    """Class that preps data for ConvONet processing"""
+    def __init__(self, dataset_file: str, indices: list = None, 
+                 max_seq_len: int = 0, pad: bool = False, 
+                 augmentation= None) -> None:
         self.dataset_file = dataset_file
-        super().__init__(dataset_file)
-
-        self.obs_rgbd = []
-        self.total_frames = 0
-        if load_count == -1:
-            load_count = len(self.episodes)
-        for eps_id in tqdm(range(load_count)):
-            eps = self.episodes[eps_id]
-            trajectory = self.data[f"traj_{eps['episode_id']}"]
-            trajectory = load_h5_data(trajectory)
-
-            # convert the original raw observation with our batch-aware function
-            obs = convert_observation(trajectory["obs"])
-            # we use :-1 to ignore the last obs as terminal observations are included
-            # and they don't have actions
-            self.obs_rgbd.append(obs["rgbd"][:-1])
-        self.obs_rgbd = np.vstack(self.obs_rgbd)
+        self.data = h5py.File(dataset_file, "r")
+        json_path = dataset_file.replace(".h5", ".json")
+        self.json_data = load_json(json_path)
+        self.episodes = self.json_data["episodes"]
+        self.env_info = self.json_data["env_info"]
+        self.env_id = self.env_info["env_id"]
+        self.env_kwargs = self.env_info["env_kwargs"]
+        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
+        
+        self.max_seq_len = max_seq_len
+        self.pad = pad
+        self.augmentation = augmentation
 
     def __len__(self):
-        return len(self.obs_rgbd)
+        return len(self.owned_indices)
 
     def __getitem__(self, idx):
-        rgbd = self.obs_rgbd[idx]
-        # note that we rescale data on demand as opposed to storing the rescaled data directly
-        # so we can save a ton of space at the cost of a little extra compute
-        rgbd = rescale_rgbd(rgbd)
-        # permute data so that channels are the first dimension as PyTorch expects this
-        rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
-        return dict(rgbd=rgbd)
+        eps = self.episodes[self.owned_indices[idx]]
+        trajectory = self.data[f"traj_{eps['episode_id']}"]
+        trajectory = load_h5_data(trajectory)
+
+        # convert the original raw observation with our batch-aware function
+        obs = convert_observation(trajectory["obs"])
+        
+        # we use :-1 to ignore the last obs as terminal observations are included
+        rgbd = obs["rgbd"][:-1]
+        rgbd = rescale_rgbd(rgbd, separate_cams=True)
+        rgbd = torch.from_numpy(rgbd).float().permute((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
+
+        # Add padding to sequences to match lengths and generate padding masks
+        if self.pad:
+            num_unpad_seq = rgbd.shape[0]
+            pad = self.max_seq_len - num_unpad_seq
+            seq_pad_mask = torch.cat((torch.zeros(rgbd.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
+
+            rgbd_pad = torch.zeros([pad] + list(rgbd.shape[1:]))
+            
+            rgbd = torch.cat((rgbd, rgbd_pad), axis=0).to(torch.float32)
+
+        else: # If not padding, this is being passed directly to model. 
+            seq_pad_mask = torch.zeros(rgbd.shape[0]).to(torch.bool)
+            
+        # Assume no masking for now
+        seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
+        
+        data = dict(rgbd=rgbd, seq_pad_mask=seq_pad_mask, seq_mask=seq_mask)
+        
+        if self.augmentation is not None:
+            data = self.augmentation(data)
+
+        if not self.pad: # Add extra dimension for "batch", so model runs properly when testing.
+            for k,v in data.items():
+                data[k] = v.unsqueeze(0)
+
+        return data
     
 # Need to edit/rewrite this for Conv Occ Net - idea: create scene by scene reconstructions using only the RGBD inputs
 def get_MS_loaders(cfg,  **kwargs) -> None:
@@ -397,17 +424,13 @@ class DataAugmentation:
 if __name__ == "__main__":
     path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
 
-    dataset = ManiSkillrgbSeqDataset(path, None, pad=False)
-    print("Length of Dataset: ",len(dataset))
+    dataset = ManiSkillConvONetDataSet(path)
+    obs = dataset[1]
+    img = obs["rgbd"]
+    print(img.size())
+    print(img)
 
-    # obs, action = dataset[13]    
-    # # Plot image observations
-    # fig, (ax1, ax2) = plt.subplots(1, 2)
-    # img_idx = -22
-    # imgs = obs["rgb"]
-    # ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
-    # ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
-    # plt.show()
+
 
 
     ### Commands for trajectory replay ###
