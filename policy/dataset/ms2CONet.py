@@ -159,11 +159,6 @@ class ManiSkillrgbdDataset(ManiSkillDataset):
         return dict(rgbd=rgbd, state=state), action
     
 
-class ManiSkillstateDataset(ManiSkillDataset):
-    def __init__(self, dataset_file: str, load_count=-1) -> None:
-        raise(NotImplementedError)
-    
-    
 class ManiSkillrgbSeqDataset(ManiSkillDataset):
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
