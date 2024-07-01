@@ -36,28 +36,9 @@ def convert_observation(observation, robot_state_only, pos_only=True):
     rgb2 = image_obs["hand_camera"]["rgb"]
     depth2 = image_obs["hand_camera"]["depth"]
 
-    # we provide a simple tool to flatten dictionaries with state data
-    if robot_state_only:
-        if pos_only:
-            state = observation["agent"]["qpos"]
-        else:
-            state = np.hstack(
-            [
-                flatten_state_dict(observation["agent"]["qpos"]),
-                flatten_state_dict(observation["agent"]["qvel"]),
-            ]
-        )
-    else:
-        state = np.hstack(
-            [
-                flatten_state_dict(observation["agent"]),
-                flatten_state_dict(observation["extra"]),
-            ]
-        )
-
     # combine the RGB and depth images
     rgbd = np.concatenate([rgb, depth, rgb2, depth2], axis=-1)
-    obs = dict(rgbd=rgbd, state=state)
+    obs = dict(rgbd=rgbd)
     return obs
 
 
@@ -122,9 +103,7 @@ class ManiSkillrgbdDataset(ManiSkillDataset):
         self.dataset_file = dataset_file
         super().__init__(dataset_file)
 
-        self.obs_state = []
         self.obs_rgbd = []
-        self.actions = []
         self.total_frames = 0
         if load_count == -1:
             load_count = len(self.episodes)
@@ -138,123 +117,19 @@ class ManiSkillrgbdDataset(ManiSkillDataset):
             # we use :-1 to ignore the last obs as terminal observations are included
             # and they don't have actions
             self.obs_rgbd.append(obs["rgbd"][:-1])
-            self.obs_state.append(obs["state"][:-1])
-            self.actions.append(trajectory["actions"])
         self.obs_rgbd = np.vstack(self.obs_rgbd)
-        self.obs_state = np.vstack(self.obs_state)
-        self.actions = np.vstack(self.actions)
 
     def __len__(self):
         return len(self.obs_rgbd)
 
     def __getitem__(self, idx):
-        action = torch.from_numpy(self.actions[idx]).float()
         rgbd = self.obs_rgbd[idx]
         # note that we rescale data on demand as opposed to storing the rescaled data directly
         # so we can save a ton of space at the cost of a little extra compute
         rgbd = rescale_rgbd(rgbd)
         # permute data so that channels are the first dimension as PyTorch expects this
         rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
-        state = torch.from_numpy(self.obs_state[idx]).float()
-        return dict(rgbd=rgbd, state=state), action
-    
-
-class ManiSkillrgbSeqDataset(ManiSkillDataset):
-    """Class that organizes maniskill demo dataset into distinct rgb sequences
-    for each episode"""
-    def __init__(self, dataset_file: str, indices: list, 
-                 max_seq_len: int = 0, max_skill_len: int = 10, 
-                 pad: bool =True, augmentation=None,
-                 action_scaling=None,
-                 state_scaling=None) -> None:
-        self.dataset_file = dataset_file
-        self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
-        
-        self.max_seq_len = max_seq_len
-        self.max_skill_len = max_skill_len
-        self.max_num_skills = int(max_seq_len/max_skill_len)
-        self.pad = pad
-        self.augmentation = augmentation
-
-        if action_scaling is None:
-            self.action_scaling = lambda x: x
-        else:
-            self.action_scaling = action_scaling
-        
-        if state_scaling is None:
-            self.state_scaling = lambda x: x
-        else:
-            self.state_scaling = state_scaling
-
-    def __len__(self):
-        return len(self.owned_indices)
-
-    def __getitem__(self, idx):
-        eps = self.episodes[self.owned_indices[idx]]
-        trajectory = self.data[f"traj_{eps['episode_id']}"]
-        trajectory = load_h5_data(trajectory)
-
-        # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"], robot_state_only=True)
-        
-        # we use :-1 to ignore the last obs as terminal observations are included
-        # and they don't have actions # TODO GRIPPER FIX
-        actions = self.action_scaling(torch.from_numpy(trajectory["actions"][:,:-1]).float())
-        assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
-        state = self.state_scaling(torch.from_numpy(obs["state"][:-1]).float())
-
-        rgbd = obs["rgbd"][:-1]
-        rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
-        rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
-
-        # Add padding to sequences to match lengths and generate padding masks
-        if self.pad:
-            num_unpad_seq = rgb.shape[0]
-            pad = self.max_seq_len - num_unpad_seq
-            seq_pad_mask = torch.cat((torch.zeros(rgb.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
-
-            rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
-            state_pad = torch.zeros([pad] + list(state.shape[1:]))
-            act_pad = torch.zeros([pad] + list(actions.shape[1:]))
-            
-            rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
-            actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
-            state = torch.cat((state, state_pad), axis=0).to(torch.float32)
-
-            # Infer skill padding mask from input sequence mask # TODO for
-            num_unpad_skills = torch.ceil(torch.tensor(num_unpad_seq / self.max_skill_len)) # get skills with relevant outputs TODO handle non divisible skill lengths
-            skill_pad_mask = torch.zeros(self.max_num_skills) # True is unattended
-            skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
-            skill_pad_mask = skill_pad_mask.to(torch.bool)
-        else: # If not padding, this is being passed directly to model. 
-            seq_pad_mask = torch.zeros(rgb.shape[0]).to(torch.bool)
-            num_unpad_skills = torch.ceil(torch.tensor(rgb.shape[0] / self.max_skill_len)).to(torch.int16)
-            skill_pad_mask = torch.zeros(num_unpad_skills).to(torch.bool)
-            
-        # Assume no masking for now
-        seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
-        skill_mask = torch.zeros(skill_pad_mask.shape[-1], skill_pad_mask.shape[-1]).to(torch.bool)
-
-        data = dict(rgb=rgb, state=state, 
-                    seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask, 
-                    seq_mask=seq_mask, skill_mask=skill_mask,
-                    actions=actions)
-        
-        if self.augmentation is not None:
-            data = self.augmentation(data)
-
-        if not self.pad: # Add extra dimension for "batch", so model runs properly when testing.
-            for k,v in data.items():
-                data[k] = v.unsqueeze(0)
-
-        return data
+        return dict(rgbd=rgbd)
     
 
 def get_MS_loaders(cfg,  **kwargs) -> None:
