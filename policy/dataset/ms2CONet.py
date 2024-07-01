@@ -420,15 +420,48 @@ class DataAugmentation:
 
         return data
 
+import matplotlib
+import matplotlib.animation as animation
 
 if __name__ == "__main__":
     path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
 
     dataset = ManiSkillConvONetDataSet(path)
-    obs = dataset[1]
-    img = obs["rgbd"]
-    print(img.size())
-    print(img)
+    
+    # Create a figure and axis
+    fig, ax = plt.subplots()
+
+    # Generate a series of images
+    images = []
+
+    episode = dataset[0]['rgbd']
+    batch = episode[0]
+    for scene in batch:
+        cam = scene[0]
+        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
+        images.append(img)
+
+    # Initialize the image
+    im = ax.imshow(images[0])
+
+    # Function to update the image
+    def update(frame):
+        im.set_array(images[frame])
+        return im,
+
+    # Create the animation
+    ani = animation.FuncAnimation(
+        fig,        # The figure object
+        update,     # The update function
+        frames=len(images),  # Number of frames
+        interval=100,  # Interval in milliseconds
+        blit=True    # Use blitting to optimize drawing
+    )
+
+    # Display the animation
+    plt.show()
+
+    
 
 
 
