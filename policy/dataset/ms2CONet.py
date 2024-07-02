@@ -128,7 +128,7 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
         
         # we use :-1 to ignore the last obs as terminal observations are included
         rgbd = obs["rgbd"][:-1]
-        rgbd = rescale_rgbd(rgbd, separate_cams=True)
+        rgbd = rescale_rgbd(rgbd, scale_rgb_only= True, separate_cams=True)
         rgbd = torch.from_numpy(rgbd).float().permute((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
 
         # Add padding to sequences to match lengths and generate padding masks
@@ -435,35 +435,28 @@ if __name__ == "__main__":
     if pointcloud:
         episode = dataset[0]["rgbd"]
         batch = episode[0]
-        scene = batch[100]
+        scene = batch[136]
         cam = scene[1]
         img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
         depth_map = tensor_to_numpy(cam[3, :, :])
-        
-        # Intrinsic camera parameters (example values)
-        fx = 100.0  # Focal length in x
-        fy = 100.0  # Focal length in y
-        cx = 64   # Principal point x
-        cy = 64   # Principal point y
 
-        # Generate 3D points
+        points = []
         height, width = depth_map.shape
-        i, j = np.meshgrid(np.arange(width), np.arange(height))
-        z = depth_map
-        x = (j - cx) * z / fx
-        y = (i - cy) * z / fy
-        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
-
-        # Generate colors
-        colors = img.reshape(-1, 3) / 255.0
-
-        # Create Open3D point cloud object
+        for h in range(height):
+            for w in range(width):
+                newrow = [h, w, depth_map[h][w]]
+                points.append(newrow)
+                
+        points = np.array(points, dtype=float)
+        
+        combimg = o3d.t.geometry.RGBDImage(img, points)
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(points)
-        # pcd.colors = o3d.utility.Vector3dVector(colors)
+        # pcd.points = o3d.utility.Vector3dVector(points)
+        pcd.points.color = o3d.core.Tensor(img)
 
-        # Visualize the point cloud
+
         o3d.visualization.draw_geometries([pcd])
+        
     
 
     if animate:
