@@ -165,11 +165,12 @@ class ManiSkillstateDataset(ManiSkillDataset):
 class ManiSkillrgbSeqDataset(ManiSkillDataset):
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
-    def __init__(self, dataset_file: str, indices: list, 
-                 max_seq_len: int = 0, max_skill_len: int = 10, 
-                 pad: bool =True, augmentation=None,
-                 action_scaling=None,
-                 state_scaling=None) -> None:
+    def __init__(self, dataset_file: str, 
+                 ep_indices: list,
+                 max_seq_len: int = 200, max_skill_len: int = 10, 
+                 pad: bool=True, augmentation=None,
+                 action_scaling=None, state_scaling=None,
+                 full_seq: bool = True) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -178,13 +179,13 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.env_info = self.json_data["env_info"]
         self.env_id = self.env_info["env_id"]
         self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
-        
+        self.owned_ep_indices = ep_indices
         self.max_seq_len = max_seq_len
         self.max_skill_len = max_skill_len
         self.max_num_skills = int(max_seq_len/max_skill_len)
         self.pad = pad
         self.augmentation = augmentation
+        self.full_seq = full_seq
 
         if action_scaling is None:
             self.action_scaling = lambda x: x
@@ -197,10 +198,10 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             self.state_scaling = state_scaling
 
     def __len__(self):
-        return len(self.owned_indices)
+        return len(self.owned_ep_indices)
 
     def __getitem__(self, idx):
-        eps = self.episodes[self.owned_indices[idx]]
+        eps = self.episodes[self.owned_ep_indices[idx]]
         trajectory = self.data[f"traj_{eps['episode_id']}"]
         trajectory = load_h5_data(trajectory)
 
@@ -230,18 +231,13 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
             actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
             state = torch.cat((state, state_pad), axis=0).to(torch.float32)
-
-            # Infer skill padding mask from input sequence mask # TODO for
-            num_unpad_skills = torch.ceil(torch.tensor(num_unpad_seq / self.max_skill_len)) # get skills with relevant outputs TODO handle non divisible skill lengths
-            skill_pad_mask = torch.zeros(self.max_num_skills) # True is unattended
-            skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
-            skill_pad_mask = skill_pad_mask.to(torch.bool)
         else: # If not padding, this is being passed directly to model. 
             seq_pad_mask = torch.zeros(rgb.shape[0]).to(torch.bool)
-            num_unpad_skills = torch.ceil(torch.tensor(rgb.shape[0] / self.max_skill_len)).to(torch.int16)
-            skill_pad_mask = torch.zeros(num_unpad_skills).to(torch.bool)
+        
+        # Infer skill padding mask from input sequence mask
+        skill_pad_mask = self.get_skill_pad_from_seq_pad(seq_pad_mask)
             
-        # Assume no masking for now
+        # Assume no masking for now TODO
         seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
         skill_mask = torch.zeros(skill_pad_mask.shape[-1], skill_pad_mask.shape[-1]).to(torch.bool)
 
@@ -258,6 +254,16 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
                 data[k] = v.unsqueeze(0)
 
         return data
+
+    def get_skill_pad_from_seq_pad(self, seq_pad):
+        """Functions for generating a skill padding mask from a given sequence padding mask,
+        based on the max skill length from the config. Always adds the padding at the end"""
+        num_unpad_seq = torch.sum(torch.logical_not(seq_pad).to(torch.int16))
+        num_unpad_skills = torch.ceil(num_unpad_seq / self.max_skill_len) # get skills with relevant outputs TODO handle non divisible skill lengths
+        skill_pad_mask = torch.zeros(self.max_num_skills) # True is unattended
+        skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
+        skill_pad_mask = skill_pad_mask.to(torch.bool) 
+        return skill_pad_mask
     
 
 def get_MS_loaders(cfg,  **kwargs) -> None:
@@ -265,20 +271,50 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         dataset_file: str = cfg_data["dataset"]
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
-        augment: bool = cfg["data"].get("augment", False) # Augmentation
-        max_skill_len = cfg["model"]["max_skill_len"] # Max skill length
-        count = cfg_data.get("max_count",None) # Dataset count limitations
-
+        augment: bool = cfg_data.get("augment", False) # Augmentation
+        count: int = cfg_data.get("max_count", 0) # Dataset count limitations
+        max_skill_len: int = cfg["model"]["max_skill_len"] # Max skill length
+        
+        # Scale actions, or compute action normalization for the dataset
+        action_scaling = cfg_data.get("action_scaling",1)
+        state_scaling = cfg_data.get("state_scaling",1)
+        gripper_scaling = cfg_data.get("gripper_scaling", None)
+        max_seq_len = cfg_data.get("max_seq_len", 0)
+        
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
         episodes = json_data["episodes"]
 
-        # Try loading exiting train/val split indices
-        existing_indices = kwargs.get("indices", None)
-        path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
-        if existing_indices is None:
+        # Try loading existing data config info pickle file
+        path = os.path.join(cfg["training"]["out_dir"],'data_info.pickle')
+        try:
+            with open(path,'rb') as f:
+                    data_info = pickle.load(f)
+            print("Found existing data info file")
+        except FileNotFoundError:
+            data_info = dict()
+
+        # Try loading existing train/val split indices
+        override_indices = kwargs.get("indices", None)
+        recompute_scaling = False
+        if override_indices is not None:
+            print("Using override indices")
+            train_idx, val_idx = override_indices
+            recompute_scaling = True
+        elif all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
+            print(f"Loading indices from file: {path}")
+            train_idx = data_info["train_indices"]
+            val_idx = data_info["val_indices"]
+            if all([i in data_info.keys() for i in ("action_scaling", "state_scaling")]):
+                print("Loading action and state scaling from file")
+                act_scaling = data_info["action_scaling"]
+                stt_scaling = data_info["state_scaling"]
+            else:
+                recompute_scaling = True
+        else:
+            print("Updating data info file train & val indices")
             num_episodes = len(episodes)
             indices = list(range(num_episodes))
             
@@ -287,10 +323,9 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 np.random.shuffle(indices)
             
             # Limit number of loaded episodes if needed
-            if count is not None:
-                assert count <= num_episodes
+            if count > 0 and count < num_episodes: 
                 num_episodes = count
-                indices = indices[:num_episodes]
+                indices = indices[:count]
 
             # Train/Val split
             split_idx = int(np.floor(num_episodes*val_split))
@@ -298,53 +333,18 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             val_idx = indices[num_episodes-split_idx:]
             
             # Save index split to pickle file
-            if os.path.exists(path):
-                print("Replacing existing train/val index file")
-                with open(path,'wb') as f:
-                    pickle.dump((train_idx, val_idx), f)
-            else:
-                print("Creating new train/val index file")
-                with open(path,'xb') as f:
-                    pickle.dump((train_idx, val_idx), f)
-        elif existing_indices=="file":
-            assert os.path.exists(path), "out directory does not contain index file"
-            print(f"Loading indices from file: {path}")
-            with open(path,'rb') as f:
-                    train_idx, val_idx = pickle.load(f)
-        else:
-            train_idx, val_idx = existing_indices
+            data_info["train_indices"] = train_idx
+            data_info["val_indices"] = val_idx
 
+            recompute_scaling = True
 
-        # If a max sequence length isn't passed need to find it from the data to allow batching
-        max_seq_len = cfg_data.get("max_seq_len", 0)
-        if not max_seq_len:
-            print("Computing max sequence length...")
-            for idx in tqdm(range(num_episodes)):
-                eps = episodes[idx]
-                trajectory = data[f"traj_{eps['episode_id']}"]
-                trajectory = load_h5_data(trajectory)
-                seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
-                if seq_size > max_seq_len:
-                    max_seq_len = seq_size
-            print("Max sequence length found to be: ", max_seq_len)
-
-        # Scale actions, or compute action normalization for the dataset
-        action_scaling = cfg_data.get("action_scaling",1)
-        state_scaling = cfg_data.get("state_scaling",1)
-        gripper_scaling = cfg_data.get("gripper_scaling", None)
-
-        # Create scaling functions
-        path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
-        if action_scaling=="file":
-            assert os.path.exists(path)
-            print("loading existing scaling file")
-            with open(path,'rb') as f:
-                act_scaling, stt_scaling = pickle.load(f)
-        else:
-            print("Collecting all actions and states...")
+        # Create scaling functions if needed
+        if recompute_scaling:
+            print("Recomputing scaling functions...")
             all_acts = []
             all_states = []
-            for idx in tqdm(range(num_episodes)):
+            for i in tqdm(range(len(train_idx)), "Collecting all training actions and states:"):
+                idx = train_idx[i]
                 eps = episodes[idx]
                 trajectory = data[f"traj_{eps['episode_id']}"]
                 trajectory = load_h5_data(trajectory)
@@ -353,6 +353,11 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 states = torch.from_numpy(obs["state"][:-1]).float()
                 all_acts.append(actions)
                 all_states.append(states)
+                seq_size = actions.shape[0]
+                if seq_size > max_seq_len:
+                    print(f"Updating max sequence length: {seq_size}")
+                    max_seq_len = seq_size
+                
             all_acts = torch.vstack(all_acts)
             all_states = torch.vstack(all_states)
             
@@ -366,18 +371,15 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 act_scaling = ScalingFunction(action_scaling, joint_acts, sep_idx)
                 stt_scaling = ScalingFunction(state_scaling, all_states, None)
 
-            # Save action scaling values to pickle file
-            if os.path.exists(path):
-                print("Replacing existing scaling file")
-                with open(path,'wb') as f:
-                    pickle.dump((act_scaling, stt_scaling), f)
-            else:
-                print("Creating new scaling file")
-                with open(path,'xb') as f:
-                    pickle.dump((act_scaling, stt_scaling), f)
+            data_info["action_scaling"] = act_scaling
+            data_info["state_scaling"] = stt_scaling
 
+        # Save updated data info file
+        print("Saving data info file")
+        with open(path,'wb') as f:
+            pickle.dump(data_info, f)
 
-        # Apply augmentations
+        # Obtain augmentations
         if augment:
             train_augmentation = DataAugmentation(cfg)
             if cfg["data"]["augmentation"].get("val_augmentation",False):
@@ -461,10 +463,10 @@ class ScalingFunction():
             self.scaling_fcn_forward = lambda x: self.scaling_for(x)
             self.scaling_fcn_inverse = lambda x: self.scaling_inv(x)
     
-    def __call__(self, x, fcn="forward"):
-        if fcn=="forward":
+    def __call__(self, x, mode="forward"):
+        if mode=="forward":
             return self.scaling_fcn_forward(x)
-        elif fcn=="inverse":
+        elif mode=="inverse":
             return self.scaling_fcn_inverse(x)
     
     def seperate_scaling(self, fcn, x, idx):

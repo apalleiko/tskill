@@ -356,8 +356,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["pad_train"] = False
     cfg["data"]["pad_val"] = False
     cfg["data"]["augment"] = False
-    cfg["data"]["action_scaling"] = "file"
-    cfg["data"]["state_scaling"] = "file"
+    cfg["data"]["action_scaling"] = "normal"
+    cfg["data"]["state_scaling"] = 1
     train_dataset, val_dataset = get_MS_loaders(cfg, 
                                                 indices=(train_idx, val_idx),
                                                 return_datasets=True
@@ -370,7 +370,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         print("Using Training Dataset")
 
     # Model
-    model = config.get_model(cfg, device=None)
+    model = config.get_model(cfg, device="cpu")
+    model.eval()
     print(model)
 
     pbar = tqdm(position=proc_id, leave=None, unit="step", dynamic_ncols=True)
@@ -485,20 +486,19 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             data = dataset[i]
             with torch.no_grad():
                 out = model(data)
-            true_actions = ori_h5_file[traj_id]["actions"][:]
+            true_actions = ori_h5_file[traj_id]["actions"][:,:-1] # TODO GRIPPER FIX
             a_hat = out["a_hat"].detach().cpu().squeeze()
-            a_hat = dataset.action_scaling(a_hat, "inverse")
-            a_hat = a_hat.numpy()
+            a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
             ori_actions = []
             for i in range(a_hat.shape[0]):
-                ori_actions.append(np.hstack((a_hat[i,:],np.array([0])))) # TODO NO GRIPPER
+                ori_actions.append(np.hstack((a_hat[i,:],np.array([0])))) # TODO GRIPPER FIX
 
 
             writer = SummaryWriter(tb_out_dir)
             seq,_ = a_hat.shape
             for i in range(seq):
                 v_i = a_hat[i,:]
-                a_i = true_actions[i,:]
+                a_i = true_actions[i,:-1] # TODO GRIPPER FIX
                 if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
                     writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
                     writer.add_histogram(f'ep_{ind}_atrue', a_i, i)

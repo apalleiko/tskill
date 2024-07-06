@@ -41,7 +41,6 @@ class TSkillCVAE(nn.Module):
             device: device to operate on
         kwargs:
             autoregressive: Whether skill generation and action decoding is autoregressive TODO
-            single_skill: Whether only one skill is generated per input sequence TODO
         """
         super().__init__()
         ### General args
@@ -51,11 +50,10 @@ class TSkillCVAE(nn.Module):
         self.z_dim = z_dim
         self.max_skill_len = max_skill_len
         self._device = device
-        self.autoregressive = kwargs.get("autoregressive",False)
-        self.single_skill = kwargs.get("single_skill",False)
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.norm = nn.LayerNorm
+        self.autoregressive = kwargs.get("autoregressive",False)
 
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
@@ -125,7 +123,7 @@ class TSkillCVAE(nn.Module):
         """
         qpos = data["state"].to(self._device)
         images = data["rgb"].to(self._device)
-        actions = data["actions"].to(self._device)
+        actions = data["actions"].to(self._device) if data["actions"] is not None else None
         seq_pad_mask = data["seq_pad_mask"].to(self._device)
         skill_pad_mask = data["skill_pad_mask"].to(self._device)
         seq_mask = None # TODO data["seq_mask"][0,:,:].to(self._device)
@@ -140,21 +138,13 @@ class TSkillCVAE(nn.Module):
                                             seq_pad_mask, skill_pad_mask, seq_mask, skill_mask)
         
         # Decode skills conditioned with state & image from sequence start ("current" state)
-        run_subseq = kwargs.get("run_subseq", 0)
-        if run_subseq > 0: # TODO Decode skills for subsequences of the predictions for training
-            assert max_num_skills % run_subseq == 0, "max_num_skills not divisible by run_subseq"
-            for i in range(int(max_num_skills / run_subseq)):
-                seq0 = i*self.max_skill_len*run_subseq
-                raise NotImplementedError
-                
-        else:
-            a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
-                                      skill_pad_mask, seq_pad_mask, skill_mask, seq_mask)
+        a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
+                                    skill_pad_mask, seq_pad_mask, skill_mask, seq_mask)
 
-            a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
-            mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
-            logvar = logvar.permute(1,0,2)
-            return dict(a_hat=a_hat, mu=mu, logvar=logvar)
+        a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
+        mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
+        logvar = logvar.permute(1,0,2)
+        return dict(a_hat=a_hat, mu=mu, logvar=logvar)
         
 
     def forward_encode(self, qpos, actions, img_info, max_num_skills, 

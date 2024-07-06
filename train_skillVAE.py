@@ -99,7 +99,8 @@ def main(args):
         out_dir = args.out_dir
     else:
         out_dir = cfg["training"]["out_dir"]
-    
+
+    # cfg stuff
     if args.debug:
         cfg["training"]["batch_size"] = 1
         cfg["training"]["visualize_every"] = 100
@@ -110,10 +111,26 @@ def main(args):
         cfg["training"]["visualize_total"] = 1
         cfg["training"]["max_it"] = 1
 
+    # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
     weight_decay = cfg["training"].get("weight_decay", 1e-4)
-
-    # Initialize WANDB
+    print_every = cfg["training"]["print_every"]
+    checkpoint_every = cfg["training"]["checkpoint_every"]
+    validate_every = cfg["training"]["validate_every"]
+    visualize_every = cfg["training"]["visualize_every"]
+    backup_every = cfg["training"]["backup_every"]
+    max_it = cfg["training"]["max_it"]
+    if args.max_it > 0:
+        max_it = args.max_it
+    model_selection_metric = cfg["training"]["model_selection_metric"]
+    if cfg["training"]["model_selection_mode"] == "maximize":
+        model_selection_sign = 1
+    elif cfg["training"]["model_selection_mode"] == "minimize":
+        model_selection_sign = -1
+    else:
+        raise ValueError("model_selection_mode must be " "either maximize or minimize.")
+    
+    # Initialize wandb
     project_name = "tskill"
     run_name = "peg_insertion"
     if args.bootstrap:
@@ -125,19 +142,7 @@ def main(args):
     wandb.run.save()
     yaml.dump(cfg, sys.stdout)
 
-    backup_every = cfg["training"]["backup_every"]
-    max_it = cfg["training"]["max_it"]
-    if args.max_it > 0:
-        max_it = args.max_it
-
-    model_selection_metric = cfg["training"]["model_selection_metric"]
-    if cfg["training"]["model_selection_mode"] == "maximize":
-        model_selection_sign = 1
-    elif cfg["training"]["model_selection_mode"] == "minimize":
-        model_selection_sign = -1
-    else:
-        raise ValueError("model_selection_mode must be " "either maximize or minimize.")
-
+    # make output dir
     if os.path.exists(out_dir) and args.fresh_start:
         print(f"Removing existing directory {out_dir}")
         shutil.rmtree(out_dir, ignore_errors=True)
@@ -148,6 +153,7 @@ def main(args):
 
     # Dataset
     train_loader, val_loader = get_MS_loaders(cfg)
+    train_dataset, val_dataset = train_loader.dataset, val_loader.dataset
     print("Train Size: ",len(train_loader),"\n","Val Size: ",len(val_loader))
 
     # Model
@@ -199,12 +205,6 @@ def main(args):
         % (model_selection_metric, metric_val_best)
     )
 
-    # Shorthands
-    print_every = cfg["training"]["print_every"]
-    checkpoint_every = cfg["training"]["checkpoint_every"]
-    validate_every = cfg["training"]["validate_every"]
-    visualize_every = cfg["training"]["visualize_every"]
-
     # Print model
     nparameters = sum(p.numel() for p in model.parameters())
     n_trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -227,9 +227,6 @@ def main(args):
             it += 1
             
             losses, met = trainer.train_step(batch)
-            
-            acts = batch["actions"]
-            ahat = met["ahat_vector_traj"]
 
             # Tensorboard model graph
             # if args.debug:
@@ -248,12 +245,12 @@ def main(args):
                 metrics.update({"train/metrics/lr": scheduler.get_last_lr()[0]})
             wandb.log(metrics)
             
-            # Log tensorboard histograms
+            # Log tensorboard input histograms
             if epoch_it == 1 and args.log_inputs:
                 writer = SummaryWriter(tb_out_dir)
                 acts = batch["actions"]
                 qpos = batch["state"]
-                bs, seq, act_dim = acts.shape
+                bs, seq, _ = acts.shape
                 for b in range(bs):
                     for i in range(seq):
                         acts_i = acts[b,i,:]
@@ -334,11 +331,16 @@ def main(args):
                     if "traj" in k:
                         _,seq,_ = v.shape
                         for i in range(seq):
-                            v_i = v[0,i,:]
-                            a_i = acts[0,i,:]
+                            v_i = v[0,i,:].detach().cpu()
+                            a_i = acts[0,i,:].detach().cpu()
                             if torch.nonzero(a_i).shape[0] > 0:
                                 writer.add_histogram(f'it_{it}_{k}', v_i, i)
                                 writer.add_histogram(f'it_{it}_atrue_vector_traj', a_i, i)
+                                if "ahat" in k:
+                                    v_it = train_dataset.action_scaling(v_i.unsqueeze(0),"inverse")
+                                    a_it = train_dataset.action_scaling(a_i.unsqueeze(0),"inverse")
+                                    writer.add_histogram(f'it_{it}_{k}_unscaled', v_it, i)
+                                    writer.add_histogram(f'it_{it}_atrue_vector_traj_unscaled', a_it, i)
                     elif "vector" in k:
                         writer.add_histogram(f'{k}', v, it)
                 writer.close()
