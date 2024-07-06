@@ -92,8 +92,7 @@ class TSkillCVAE(nn.Module):
         self.dec_src_norm = self.norm(self.hidden_dim)
         self.dec_tgt_norm = self.norm(self.hidden_dim)
 
-        # self.dec_action_proj = nn.Linear(self.hidden_dim, action_dim)
-
+        # Action heads
         nl = self.hidden_dim
         action_head = []  # TODO make this an mlp?
         for n in (128, 64, 32):
@@ -101,8 +100,10 @@ class TSkillCVAE(nn.Module):
             action_head.append(self.norm(n))
             action_head.append(nn.LeakyReLU())
             nl = n
-        action_head.append(nn.Linear(nl, action_dim))
-        self.dec_action_proj = nn.Sequential(*action_head)
+        self.dec_action_head = nn.Sequential(*action_head)
+        self.dec_action_joint_proj = nn.Linear(nl, action_dim-1) # Decode joint actions
+        # Decode gripper actions with a tanh to restrict between -1 and 1
+        self.dec_action_gripper_proj = nn.Sequential(nn.Linear(nl, 1), nn.Tanh()) 
 
         # Other
         self.metrics = dict()
@@ -324,7 +325,11 @@ class TSkillCVAE(nn.Module):
         self.log_metric(dec_output[:,0,:], "dec_out_vector_along_seq", "mean_along_seq") # TEMP METRIC
         self.log_metric(dec_output, "mean_dec_output", "nonzero_mean") # METRIC
         
-        a_hat = self.dec_action_proj(dec_output) # (bs, seq, act_dim)
+        # Send decoder output through MLP and project to action dimensions
+        a_head = self.dec_action_head(dec_output) # (bs, seq, 32)
+        a_joint = self.dec_action_joint_proj(a_head) # (bs, seq, action_dim - 1)
+        a_grip = self.dec_action_gripper_proj(a_head) # (bs, seq, 1)
+        a_hat = torch.cat((a_joint, a_grip), -1) # (bs, seq, action_dim)
 
         return a_hat
     

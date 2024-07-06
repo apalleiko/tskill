@@ -103,11 +103,11 @@ def main(args):
     # cfg stuff
     if args.debug:
         cfg["training"]["batch_size"] = 1
-        cfg["training"]["visualize_every"] = 100
+        cfg["training"]["visualize_every"] = 1
         cfg["training"]["print_every"] = 1
-        cfg["training"]["backup_every"] = 100
-        cfg["training"]["validate_every"] = 100
-        cfg["training"]["checkpoint_every"] = 100
+        cfg["training"]["backup_every"] = 1
+        cfg["training"]["validate_every"] = 1
+        cfg["training"]["checkpoint_every"] = 1
         cfg["training"]["visualize_total"] = 1
         cfg["training"]["max_it"] = 1
 
@@ -167,7 +167,6 @@ def main(args):
             "params": [p for n, p in model.named_parameters() if "stt_encoder" in n and p.requires_grad],
             "lr": cfg["training"]["lr_state_encoder"],
         })
-
     n_p = 0
     for d in param_dicts:
         n_p += sum([p.numel() for p in d["params"]])
@@ -260,7 +259,6 @@ def main(args):
                             writer.add_histogram(f'ep_{it*b + b}_all_qpos', qpos_i, i)
                         else:
                             continue
-                ep += 1
                 writer.close()
 
             # Print output

@@ -482,27 +482,28 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             if args.vis:
                 env.render_human()
 
-            # Original actions to replay
+            # Run model to get actions to replay
             data = dataset[i]
             with torch.no_grad():
                 out = model(data)
-            true_actions = ori_h5_file[traj_id]["actions"][:,:-1] # TODO GRIPPER FIX
+            true_actions = ori_h5_file[traj_id]["actions"]
             a_hat = out["a_hat"].detach().cpu().squeeze()
             a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
             ori_actions = []
             for i in range(a_hat.shape[0]):
-                ori_actions.append(np.hstack((a_hat[i,:],np.array([0])))) # TODO GRIPPER FIX
+                ori_actions.append(a_hat[i,:])
 
-
+            # Log action histograms
             writer = SummaryWriter(tb_out_dir)
             seq,_ = a_hat.shape
             for i in range(seq):
                 v_i = a_hat[i,:]
-                a_i = true_actions[i,:-1] # TODO GRIPPER FIX
+                a_i = true_actions[i,:]
                 if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
                     writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
                     writer.add_histogram(f'ep_{ind}_atrue', a_i, i)
             writer.close()
+
             # Plot image observations
             # fig, (ax1, ax2) = plt.subplots(1, 2)
             # img_idx = 55
@@ -518,6 +519,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             t0 = len(true_actions) - num_unpad_seq
             ori_env_state = ori_h5_file[traj_id]["env_states"][1+t0]
             env.set_state(ori_env_state)
+
             # Without conversion between control modes
             if target_control_mode is None:
                 n = len(ori_actions)

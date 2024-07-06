@@ -209,8 +209,8 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         obs = convert_observation(trajectory["obs"], robot_state_only=True)
         
         # we use :-1 to ignore the last obs as terminal observations are included
-        # and they don't have actions # TODO GRIPPER FIX
-        actions = self.action_scaling(torch.from_numpy(trajectory["actions"][:,:-1]).float())
+        # and they don't have actions
+        actions = self.action_scaling(torch.from_numpy(trajectory["actions"]).float())
         assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1]).float())
 
@@ -249,7 +249,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         if self.augmentation is not None:
             data = self.augmentation(data)
 
-        if not self.pad: # Add extra dimension for "batch", so model runs properly when testing.
+        if not self.pad: # Add extra dimension for batch size as model expects this.
             for k,v in data.items():
                 data[k] = v.unsqueeze(0)
 
@@ -275,12 +275,13 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         count: int = cfg_data.get("max_count", 0) # Dataset count limitations
         max_skill_len: int = cfg["model"]["max_skill_len"] # Max skill length
         
-        # Scale actions, or compute action normalization for the dataset
+        # Scale actions/states, or compute normalization for the dataset
         action_scaling = cfg_data.get("action_scaling",1)
         state_scaling = cfg_data.get("state_scaling",1)
-        gripper_scaling = cfg_data.get("gripper_scaling", None)
+        gripper_scaling = cfg_data.get("gripper_scaling", True)
         max_seq_len = cfg_data.get("max_seq_len", 0)
-        
+        recompute_scaling = False
+
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -298,7 +299,6 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
 
         # Try loading existing train/val split indices
         override_indices = kwargs.get("indices", None)
-        recompute_scaling = False
         if override_indices is not None:
             print("Using override indices")
             train_idx, val_idx = override_indices
@@ -349,7 +349,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 trajectory = data[f"traj_{eps['episode_id']}"]
                 trajectory = load_h5_data(trajectory)
                 obs = convert_observation(trajectory["obs"], robot_state_only=True)
-                actions = torch.from_numpy(trajectory["actions"][:,:-1]).float() # TODO GRIPPER FIX
+                actions = torch.from_numpy(trajectory["actions"]).float()
                 states = torch.from_numpy(obs["state"][:-1]).float()
                 all_acts.append(actions)
                 all_states.append(states)
@@ -361,15 +361,15 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             all_acts = torch.vstack(all_acts)
             all_states = torch.vstack(all_states)
             
-            sep_idx = None
-            print("IGNORING GRIPPER ACTIONS!!") # TODO GRIPPER FIX
-            if gripper_scaling is not None: # TODO Gripper fix
-                print("computing seperate gripper scaling")
-                gripper_acts = all_acts[:,-1]
-                joint_acts = all_acts[:,:-1]
+            if not gripper_scaling:
+                print("Computing seperate gripper scaling")
                 sep_idx = -1
+                joint_acts = all_acts[:,:sep_idx]
                 act_scaling = ScalingFunction(action_scaling, joint_acts, sep_idx)
-                stt_scaling = ScalingFunction(state_scaling, all_states, None)
+            else:
+                act_scaling = ScalingFunction(action_scaling, all_acts)
+            
+            stt_scaling = ScalingFunction(state_scaling, all_states, None)
 
             data_info["action_scaling"] = act_scaling
             data_info["state_scaling"] = stt_scaling
@@ -423,13 +423,13 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
 
 
 class ScalingFunction():
-    def __init__(self, scaling, data, sep_idx) -> None:
+    def __init__(self, scaling, data, sep_idx=None) -> None:
         if isinstance(scaling, (int, float, list, tuple)):
             print("Computing linear scaling")
             self.scaling_for = lambda x: x * torch.tensor(scaling)
             self.scaling_inv = lambda x: x / torch.tensor(scaling)
         elif scaling=="norm": 
-            print("Computing action norm")
+            print("Computing norm scaling")
             act_mu = torch.mean(data, 0)
             act_std = torch.std(data, 0)
             self.scaling_for = lambda x: (x - act_mu) / torch.sqrt(act_std)
