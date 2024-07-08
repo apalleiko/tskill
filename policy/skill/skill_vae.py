@@ -160,36 +160,36 @@ class TSkillCVAE(nn.Module):
         if is_training:
             enc_type_embed = self.input_embed.weight * self.input_embed_scale_factor
             enc_type_embed = enc_type_embed.unsqueeze(1).repeat(1, bs, 1) # (4, bs, hidden_dim)
-            self.log_metric(enc_type_embed[0, 0, :], "action_type_vector", None) # TEMP METRIC
-            self.log_metric(enc_type_embed[1, 0, :], "state_type_vector", None) # TEMP METRIC
-            self.log_metric(enc_type_embed[2, 0, :], "img_type_vector", None) # TEMP METRIC
-            self.log_metric(enc_type_embed[3, 0, :], "z_type_vector", None) # TEMP METRIC
+            # self.log_metric(enc_type_embed[0, 0, :], "action_type_vector", None) # TEMP METRIC
+            # self.log_metric(enc_type_embed[1, 0, :], "state_type_vector", None) # TEMP METRIC
+            # self.log_metric(enc_type_embed[2, 0, :], "img_type_vector", None) # TEMP METRIC
+            # self.log_metric(enc_type_embed[3, 0, :], "z_type_vector", None) # TEMP METRIC
 
             # project action sequences to hidden dim (bs, seq, action_dim)
             action_src = self.enc_action_proj(actions) # (bs, seq, hidden_dim)
             action_src = self.enc_action_norm(action_src).permute(1, 0, 2) # (seq, bs, hidden_dim)
-            self.log_metric(action_src[:,0,:], "enc_action_vector_along_seq", "mean_along_seq") # TEMP METRIC
-            self.log_metric(enc_type_embed[0, :, :], "mean_enc_action_type", "mean") # METRIC
-            self.log_metric(action_src, "mean_enc_action_src", "nonzero_mean") # METRIC
+            # self.log_metric(action_src[:,0,:], "enc_action_vector_along_seq", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_type_embed[0, :, :], "mean_enc_action_type", "mean") # METRIC
+            # self.log_metric(action_src, "mean_enc_action_src", "nonzero_mean") # METRIC
             action_src = action_src + enc_type_embed[0, :, :] # add type 1 embedding
 
             # project position sequences to hidden dim (bs, seq, state_dim)
             qpos_src = self.enc_state_proj(qpos) # (bs, seq, hidden_dim)
             qpos_src = self.enc_state_norm(qpos_src).permute(1, 0, 2) # (seq, bs, hidden_dim)
-            self.log_metric(qpos_src[:,0,:], "enc_state_vector_along_seq", "mean_along_seq") # TEMP METRIC
-            self.log_metric(enc_type_embed[1, :, :], "mean_enc_qpos_type", "mean") # METRIC
-            self.log_metric(qpos_src,"mean_enc_qpos_src","nonzero_mean") # METRIC
+            # self.log_metric(qpos_src[:,0,:], "enc_state_vector_along_seq", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_type_embed[1, :, :], "mean_enc_qpos_type", "mean") # METRIC
+            # self.log_metric(qpos_src,"mean_enc_qpos_src","nonzero_mean") # METRIC
             qpos_src = qpos_src + enc_type_embed[1, :, :] # add type 2 embedding
 
             # project img with local pe to correct size
             img_pe = img_pe * self.img_pe_scale_factor
-            self.log_metric(img_pe, "enc_img_pe_vector", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(img_pe, "enc_img_pe_vector", "mean_along_seq") # TEMP METRIC
             img_src = (img_feat + img_pe) # TODO should this PE be scaled or changed?
             img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, c, h*num_cam*w)
             img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, c=hidden)
-            self.log_metric(img_src[:,0,:], "enc_img_vector_along_seq", "mean_along_seq") # TEMP METRIC
-            self.log_metric(enc_type_embed[2, :, :], "mean_enc_img_type", "mean") # METRIC
-            self.log_metric(img_src, "mean_enc_img_src", "nonzero_mean") # METRIC
+            # self.log_metric(img_src[:,0,:], "enc_img_vector_along_seq", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_type_embed[2, :, :], "mean_enc_img_type", "mean") # METRIC
+            # self.log_metric(img_src, "mean_enc_img_src", "nonzero_mean") # METRIC
             img_src = img_src + enc_type_embed[2, :, :] # add type 3 embedding
 
             # Concatenate enc_src
@@ -198,8 +198,8 @@ class TSkillCVAE(nn.Module):
             enc_src_pe = self.get_pos_table(seq) * self.enc_src_pos_scale_factor
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
             enc_src_pe = enc_src_pe.repeat(3, bs, 1)  # (3*seq, bs, hidden_dim)
-            self.log_metric(enc_src_pe, "mean_enc_src_pe", "mean" ) # METRIC
-            self.log_metric(enc_src_pe, "enc_src_pe_vector", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_src_pe, "mean_enc_src_pe", "mean" ) # METRIC
+            # self.log_metric(enc_src_pe, "enc_src_pe_vector", "mean_along_seq") # TEMP METRIC
             # Add and norm
             enc_src = enc_src + enc_src_pe
             enc_src = self.enc_src_norm(enc_src)
@@ -207,8 +207,8 @@ class TSkillCVAE(nn.Module):
             # encoder target
             enc_tgt = torch.zeros(max_num_skills, bs, self.hidden_dim).to(self._device) # (skill_seq, bs, hidden_dim)
             enc_tgt_pe = self.get_pos_table(max_num_skills).permute(1, 0, 2).repeat(1, bs, 1) * self.enc_tgt_pos_scale_factor
-            self.log_metric(img_pe, "enc_tgt_pe_vector", "mean_along_seq") # TEMP METRIC
-            self.log_metric(enc_tgt_pe, "mean_enc_tgt_pe", "mean") # METRIC
+            # self.log_metric(img_pe, "enc_tgt_pe_vector", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_tgt_pe, "mean_enc_tgt_pe", "mean") # METRIC
             # Add and norm
             enc_tgt = enc_tgt + enc_tgt_pe
             enc_tgt = self.enc_tgt_norm(enc_tgt)
@@ -232,14 +232,14 @@ class TSkillCVAE(nn.Module):
                                           tgt_is_causal=False,
                                           tgt_mask = tgt_mask,
                                           memory_is_causal=False) # (skill_seq, bs, hidden_dim)
-            self.log_metric(enc_output[:,0,:], "enc_output_vector_along_seq", "mean_along_seq") # TEMP METRIC
-            self.log_metric(enc_output, "mean_enc_output", "nonzero_mean") # METRIC
+            # self.log_metric(enc_output[:,0,:], "enc_output_vector_along_seq", "mean_along_seq") # TEMP METRIC
+            # self.log_metric(enc_output, "mean_enc_output", "nonzero_mean") # METRIC
 
             latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
             mu = latent_info[:, :, :self.z_dim]
             logvar = latent_info[:, :, self.z_dim:]
             latent_sample = reparametrize(mu, logvar) # (skill_seq, bs, latent_dim)
-            self.log_metric(latent_sample, "mean_latent_sample", "nonzero_mean") # METRIC
+            # self.log_metric(latent_sample, "mean_latent_sample", "nonzero_mean") # METRIC
         else:
             mu = logvar = None
             latent_sample = torch.zeros([max_num_skills, bs, self.z_dim], dtype=torch.float32).to(qpos.device)
@@ -266,30 +266,30 @@ class TSkillCVAE(nn.Module):
         # proprioception features
         state_src = self.dec_input_state_proj(qpos) # (bs, hidden)
         state_src = self.dec_input_state_norm(state_src).unsqueeze(0) # (1, bs, hidden)
-        self.log_metric(state_src[0,0,:], "dec_state_vector", None) # TEMP METRIC
-        self.log_metric(dec_type_embed[1, :, :], "mean_dec_state_type", "mean") # METRIC
-        self.log_metric(state_src, "mean_dec_state_src", "nonzero_mean") # METRIC
+        # self.log_metric(state_src[0,0,:], "dec_state_vector", None) # TEMP METRIC
+        # self.log_metric(dec_type_embed[1, :, :], "mean_dec_state_type", "mean") # METRIC
+        # self.log_metric(state_src, "mean_dec_state_src", "nonzero_mean") # METRIC
         state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
         state_pe = torch.zeros_like(state_src) # no pe
 
         # image, only use one image to decode rest of the skills
         img_src = img_src.permute(1, 0, 2) # (h*num_cam*w, bs, hidden)
-        self.log_metric(img_src[:,0,:], "dec_img_vector_along_seq", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(img_src[:,0,:], "dec_img_vector_along_seq", "mean_along_seq") # TEMP METRIC
         img_pe = img_pe.permute(1, 0, 2) * self.img_pe_scale_factor # sinusoidal skill pe
-        self.log_metric(img_pe, "dec_img_pe_vector", "mean_along_seq") # TEMP METRIC
-        self.log_metric(dec_type_embed[2, :, :], "mean_dec_img_type", "mean") # METRIC
-        self.log_metric(img_pe, "mean_dec_img_pe", "mean") # METRIC
-        self.log_metric(img_src, "mean_dec_img_src", "nonzero_mean") # METRIC
+        # self.log_metric(img_pe, "dec_img_pe_vector", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(dec_type_embed[2, :, :], "mean_dec_img_type", "mean") # METRIC
+        # self.log_metric(img_pe, "mean_dec_img_pe", "mean") # METRIC
+        # self.log_metric(img_src, "mean_dec_img_src", "nonzero_mean") # METRIC
         img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
 
         # skills
         z_src = self.dec_input_z_norm(z) # (skill_seq, bs, hidden_dim)
-        self.log_metric(z_src[:,0,:], "dec_z_vector_along_seq", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(z_src[:,0,:], "dec_z_vector_along_seq", "mean_along_seq") # TEMP METRIC
         z_pe = self.get_pos_table(skill_seq).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_z_pos_scale_factor
-        self.log_metric(z_pe, "enc_z_pe_vector", "mean_along_seq") # TEMP METRIC
-        self.log_metric(dec_type_embed[3, :, :], "mean_dec_z_type", "mean") # METRIC
-        self.log_metric(z_pe, "mean_dec_z_pe", "mean") # METRIC
-        self.log_metric(z_src, "mean_dec_z_src", "nonzero_mean") # METRIC
+        # self.log_metric(z_pe, "enc_z_pe_vector", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(dec_type_embed[3, :, :], "mean_dec_z_type", "mean") # METRIC
+        # self.log_metric(z_pe, "mean_dec_z_pe", "mean") # METRIC
+        # self.log_metric(z_src, "mean_dec_z_src", "nonzero_mean") # METRIC
         z_src = z_src + dec_type_embed[3, :, :].repeat(skill_seq, 1, 1) # add type 4 embedding (skill_seq, bs, hidden_dim)
 
         # Concatenate full decoder src
@@ -302,8 +302,8 @@ class TSkillCVAE(nn.Module):
         # position encoding for output sequence
         dec_tgt_pe = self.get_pos_table(seq).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (seq, 1, hidden_dim)
         dec_tgt_pe = dec_tgt_pe.repeat(1, bs, 1)  # (seq, bs, hidden_dim)
-        self.log_metric(img_pe, "dec_tgt_pe_vector", "mean_along_seq") # TEMP METRIC
-        self.log_metric(dec_tgt_pe, "mean_dec_tgt_pe", "mean") # METRIC
+        # self.log_metric(img_pe, "dec_tgt_pe_vector", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(dec_tgt_pe, "mean_dec_tgt_pe", "mean") # METRIC
         dec_tgt  = torch.zeros_like(dec_tgt_pe)
         # Add and norm
         dec_tgt = dec_tgt + dec_tgt_pe
@@ -322,8 +322,8 @@ class TSkillCVAE(nn.Module):
                           tgt_is_causal=False, # Right now, generate entire action sequence at once
                           tgt_mask=tgt_mask,
                           memory_is_causal=False) # (seq, bs, hidden_dim)
-        self.log_metric(dec_output[:,0,:], "dec_out_vector_along_seq", "mean_along_seq") # TEMP METRIC
-        self.log_metric(dec_output, "mean_dec_output", "nonzero_mean") # METRIC
+        # self.log_metric(dec_output[:,0,:], "dec_out_vector_along_seq", "mean_along_seq") # TEMP METRIC
+        # self.log_metric(dec_output, "mean_dec_output", "nonzero_mean") # METRIC
         
         # Send decoder output through MLP and project to action dimensions
         a_head = self.dec_action_head(dec_output) # (bs, seq, 32)

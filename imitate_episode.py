@@ -34,6 +34,7 @@ from mani_skill2.utils.wrappers import RecordEpisode
 
 from policy import config
 from policy.dataset.ms2dataset import get_MS_loaders
+from policy.checkpoints import CheckpointIO
 
 
 def qpos_to_pd_joint_delta_pos(controller: PDJointPosController, qpos):
@@ -348,9 +349,9 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg_path = os.path.join(args.model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     
-    index_path = os.path.join(args.model_dir, "train_val_indices.pickle")
+    index_path = os.path.join(args.model_dir, "data_info.pickle")
     with open(index_path, 'rb') as f:
-        train_idx, val_idx = pickle.load(f)
+        data_info = pickle.load(f)
 
     # Dataset
     cfg["data"]["pad_train"] = False
@@ -358,10 +359,10 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["augment"] = False
     cfg["data"]["action_scaling"] = "normal"
     cfg["data"]["state_scaling"] = 1
-    train_dataset, val_dataset = get_MS_loaders(cfg, 
-                                                indices=(train_idx, val_idx),
-                                                return_datasets=True
-                                                )
+
+    train_idx, val_idx = data_info["train_indices"], data_info["val_indices"]
+    train_dataset, val_dataset = get_MS_loaders(cfg, return_datasets=True)
+    
     if not args.train:
         dataset = val_dataset
         print("Using Validation Dataset")
@@ -371,8 +372,10 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
 
     # Model
     model = config.get_model(cfg, device="cpu")
+    checkpoint_io = CheckpointIO(args.model_dir, model=model)
+    load_dict = checkpoint_io.load("model.pt")
     model.eval()
-    print(model)
+    # print(model)
 
     pbar = tqdm(position=proc_id, leave=None, unit="step", dynamic_ncols=True)
 

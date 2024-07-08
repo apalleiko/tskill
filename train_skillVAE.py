@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from policy import config
 from policy.checkpoints import CheckpointIO
-from policy.dataset.ms2dataset import get_MS_loaders
+from policy.dataset.ms2dataset import get_MS_loaders, get_next_seq_timestep
 from policy.skill.training import Trainer
 
 matplotlib.use("Agg")
@@ -102,14 +102,14 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 1
+        cfg["training"]["batch_size"] = 5
         cfg["training"]["visualize_every"] = 1
         cfg["training"]["print_every"] = 1
-        cfg["training"]["backup_every"] = 1
-        cfg["training"]["validate_every"] = 1
-        cfg["training"]["checkpoint_every"] = 1
-        cfg["training"]["visualize_total"] = 1
-        cfg["training"]["max_it"] = 1
+        cfg["training"]["backup_every"] = 1000
+        cfg["training"]["validate_every"] = 5
+        cfg["training"]["checkpoint_every"] = 1000
+        cfg["training"]["visualize_total"] = 1000
+        cfg["training"]["max_it"] = 20
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -346,7 +346,6 @@ def main(args):
             # Exit if necessary
             if trainer.step_it >= max_it:
                 exit(0)
-        
 
 
 if __name__ == "__main__":
