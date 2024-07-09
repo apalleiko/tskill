@@ -2,20 +2,25 @@
 # Unless otherwise stated, copy/pasted from ms2dataset
 
 import os
-import os.path as osp
+import os.path
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
+# import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 import matplotlib.pylab as plt
-import time
-from mani_skill2.utils.io_utils import load_json
-from mani_skill2.utils.common import flatten_state_dict
-import h5py
 import dill as pickle
+# sklearn is deprecrated
+# if causing issues, check this
 import sklearn.preprocessing as skp
+
+
+# Below are commented out mani skill functions that I can't load
+# If there are functions below they are replicated mani skill functions
+from policy.dataset.helpers import load_json, pixelToCoordinate
+# from mani_skill2.utils.io_utils import load_json
+# from mani_skill2.utils.common import flatten_state_dict
 
 
 def tensor_to_numpy(x):
@@ -77,6 +82,36 @@ def load_h5_data(data):
     return out
 
 
+def generate_input_vector(cam):
+    """
+    Takes rgbd data from one camera and returns all points in list of 1x6 data vectors
+    Given u,v,d pixel coordinates and returns x,y,z reference frame coordinates for that point
+    followed by the corresponding RGB values.
+
+    Should only be used right before input into ConvONet
+    """
+    cam = np.array(cam)
+
+    if cam.shape != (4, 128, 128):
+        raise Exception("Camera Data has improper dimensions")
+    
+    img = cam[0:3, :, :].transpose((1, 2, 0))
+    depth_map = cam[3, :, :]
+    h, w = depth_map.shape
+    input_vec = []
+
+    for u in range(h):
+        for v in range(w):
+            x, y, z = pixelToCoordinate([u, v, depth_map[u, v]])
+            R = img[u, v, 0]
+            G = img[u, v, 1]
+            B = img[u, v, 2]
+
+            input_vec.append([x, y, z, R, G, B])
+    
+    return input_vec
+
+
 class ManiSkillDataset(Dataset):
     def __init__(self, dataset_file: str, indices: list) -> None:
         self.dataset_file = dataset_file
@@ -128,8 +163,14 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
         
         # we use :-1 to ignore the last obs as terminal observations are included
         rgbd = obs["rgbd"][:-1]
-        rgbd = rescale_rgbd(rgbd, scale_rgb_only= True, separate_cams=True)
-        rgbd = torch.from_numpy(rgbd).float().permute((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
+        rgbd = rescale_rgbd(rgbd, separate_cams=True)
+        rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
+        rgbd = rgbd.tolist()
+        for seq, seq_data in tqdm(enumerate(rgbd)):
+            for cam, cam_data in enumerate(seq_data):
+                rgbd[seq][cam] = generate_input_vector(cam_data)
+        
+        rgbd = torch.tensor(rgbd).float()
 
         # Add padding to sequences to match lengths and generate padding masks
         if self.pad:
@@ -165,10 +206,9 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
         augment: bool = cfg["data"].get("augment", False) # Augmentation
-        max_skill_len = cfg["model"]["max_skill_len"] # Max skill length
-        count = cfg_data.get("max_count",None) # Dataset count limitations
+        count = cfg_data.get("max_count", None) # Dataset count limitations
 
-        assert osp.exists(dataset_file)
+        assert os.path.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
@@ -193,58 +233,14 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                     max_seq_len = seq_size
             print("Max sequence length found to be: ", max_seq_len)
 
-        # Scale actions, or compute action normalization for the dataset
-        action_scaling = cfg_data.get("action_scaling",1)
-        state_scaling = cfg_data.get("state_scaling",1)
-        gripper_scaling = cfg_data.get("gripper_scaling", None)
-
-        print("Collecting all actions and states...")
-        print("IGNORING GRIPPER ACTIONS!!")
-        all_acts = []
-        all_states = []
+        print("Collecting all observations...")
         for idx in tqdm(range(num_episodes)):
             eps = episodes[idx]
             trajectory = data[f"traj_{eps['episode_id']}"]
             trajectory = load_h5_data(trajectory)
-            obs = convert_observation(trajectory["obs"], robot_state_only=True)
-            actions = torch.from_numpy(trajectory["actions"][:,:-1]).float() # TODO GRIPPER FIX
-            states = torch.from_numpy(obs["state"][:-1]).float()
-            all_acts.append(actions)
-            all_states.append(states)
-        all_acts = torch.vstack(all_acts)
-        all_states = torch.vstack(all_states)
-        
-        sep_idx = None
-        if gripper_scaling is not None:
-            print("computing seperate gripper scaling")
-            gripper_acts = all_acts[:,-1]
-            all_acts = all_acts[:,:-1]
-            sep_idx = -1
+            obs = convert_observation(trajectory["obs"])
 
         path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
-        if action_scaling=="file":
-            raise NotImplementedError
-            assert os.path.exists(path)
-            print("loading existing scaling file")
-            with open(path,'rb') as f:
-                action_scaling_fcns, state_scaling_fcns = pickle.load(f)
-            action_scaling_forward, action_scaling_inverse = action_scaling_fcns[0], action_scaling_fcns[1]
-            state_scaling_forward, state_scaling_inverse = state_scaling_fcns[0], state_scaling_fcns[1]
-        else:
-            action_scaling_forward, action_scaling_inverse = get_scaling_functions(all_acts, action_scaling, sep_idx)
-            state_scaling_forward, state_scaling_inverse = get_scaling_functions(all_states, state_scaling, None)
-
-            # # Save action scaling values to pickle file
-            # if os.path.exists(path):
-            #     print("Replacing existing scaling file")
-            #     with open(path,'wb') as f:
-            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
-            #                     (state_scaling_forward, state_scaling_inverse)], f)
-            # else:
-            #     print("Creating new scaling file")
-            #     with open(path,'xb') as f:
-            #         pickle.dump([(action_scaling_forward, action_scaling_inverse),
-            #                     (state_scaling_forward, state_scaling_inverse)], f)
 
         # Try loading exiting train/val split indices
         existing_indices = kwargs.get("indices", None)
@@ -261,15 +257,15 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_idx = indices[:num_episodes-split_idx]
             val_idx = indices[num_episodes-split_idx:]
             
-            # Save index split to pickle file
-            if os.path.exists(path):
-                print("Replacing existing train/val index file")
-                with open(path,'wb') as f:
-                    pickle.dump((train_idx, val_idx), f)
-            else:
-                print("Creating new train/val index file")
-                with open(path,'xb') as f:
-                    pickle.dump((train_idx, val_idx), f)
+            # # Save index split to pickle file
+            # if os.path.exists(path):
+            #     print("Replacing existing train/val index file")
+            #     with open(path,'wb') as f:
+            #         pickle.dump((train_idx, val_idx), f)
+            # else:
+            #     print("Creating new train/val index file")
+            #     with open(path,'xb') as f:
+            #         pickle.dump((train_idx, val_idx), f)
         elif existing_indices=="file":
             assert os.path.exists(path), "out directory does not contain index file"
             print(f"Loading indices from file: {path}")
@@ -294,20 +290,12 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         pad_val = cfg_data.get("pad_val", True)
 
         # Create datasets
-        train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_idx, 
-                                               max_seq_len, max_skill_len,
-                                               pad_train, train_augmentation,
-                                               action_scaling_forward,
-                                               state_scaling_forward)
-        train_dataset.action_scaling_inverse = action_scaling_inverse
-        train_dataset.state_scaling_incerse = state_scaling_inverse
-        val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_idx, 
-                                             max_seq_len, max_skill_len,
-                                             pad_val, val_augmentation,
-                                             action_scaling_forward,
-                                             state_scaling_forward)
-        val_dataset.action_scaling_inverse = action_scaling_inverse
-        val_dataset.state_scaling_incerse = state_scaling_inverse
+        train_dataset = ManiSkillConvONetDataSet(dataset_file, train_idx, 
+                                               max_seq_len,
+                                               pad_train, train_augmentation)
+        val_dataset = ManiSkillConvONetDataSet(dataset_file, val_idx, 
+                                             max_seq_len,
+                                             pad_val, val_augmentation)
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset
@@ -420,43 +408,114 @@ class DataAugmentation:
 
         return data
 
-import matplotlib
+
 import matplotlib.animation as animation
-import open3d as o3d
+# import open3d as o3d
+# import trimesh
 
 if __name__ == "__main__":
-    path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-
+    path = "tskill/data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
     dataset = ManiSkillConvONetDataSet(path)
-    
+
+    # print(dataset[0]["rgbd"][0][0][0])
+
+
     animate = False
-    pointcloud = True
+    pointcloud = False
+    trimesh_demo = False
+    data_conversion = False
+    save_data = False
+
+    if save_data:
+        data = dataset[0]["rgbd"][0][0]
+        data = tensor_to_numpy(data)
+        cam1 = data[0]
+        cam2 = data[1]
+        
+        # file name, arrayname, arraydata
+        np.savez("test_data", cam1=cam1, cam2=cam2)
+    
+
+    if data_conversion:
+        episode = dataset[0]["rgbd"]
+        batch = episode[0]
+        scene = batch[100]
+        cam = scene[0]
+        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
+        depth_map = tensor_to_numpy(cam[3, :, :])
+        h, w = depth_map.shape
+        input_vec = []
+
+        for u in range(h):
+            for v in range(w):
+                x, y, z = pixelToCoordinate([u, v, depth_map[u, v]])
+                R = img[u, v, 0]
+                G = img[u, v, 1]
+                B = img[u, v, 2]
+
+                input_vec.append([x, y, z, R, G, B])
+        
+        input_vec = np.array(input_vec, dtype=np.float32)
+        print(input_vec.shape)
+
+
+    if trimesh_demo:
+        episode = dataset[0]["rgbd"]
+        batch = episode[0]
+        scene = batch[100]
+        cam = scene[1]
+        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
+        depth_map = tensor_to_numpy(cam[3, :, :])
+        print(min(depth_map[-1, :]))
+        
+        depth_map_reform = []
+
+        row, col = depth_map.shape
+        for r in range(row):
+            for c in range(col):
+                vertex = [r, c, depth_map[r][c]]
+                depth_map_reform.append(vertex)
+
+        # depth_map_reform = np.array(depth_map_reform)
+        # print(depth_map_reform)
+
+        # mesh  = trimesh.Trimesh(depth_map_reform)
+        # print(mesh.vertices)
+        # print(mesh.vertex_normals)
+        
 
     if pointcloud:
         episode = dataset[0]["rgbd"]
         batch = episode[0]
-        scene = batch[136]
+        scene = batch[100]
         cam = scene[1]
         img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
         depth_map = tensor_to_numpy(cam[3, :, :])
+        
+        # Intrinsic camera parameters (example values)
+        fx = 100.0  # Focal length in x
+        fy = 100.0  # Focal length in y
+        cx = 64   # Principal point x
+        cy = 64   # Principal point y
 
-        points = []
+        # Generate 3D points
         height, width = depth_map.shape
-        for h in range(height):
-            for w in range(width):
-                newrow = [h, w, depth_map[h][w]]
-                points.append(newrow)
-                
-        points = np.array(points, dtype=float)
-        
-        combimg = o3d.t.geometry.RGBDImage(img, points)
-        pcd = o3d.geometry.PointCloud()
+        i, j = np.meshgrid(np.arange(width), np.arange(height))
+        z = depth_map
+        x = (j - cx) * z / fx
+        y = (i - cy) * z / fy
+        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
+
+        # Generate colors
+        colors = img.reshape(-1, 3) / 255.0
+
+        # Create Open3D point cloud object
+        # pcd = o3d.geometry.PointCloud()
         # pcd.points = o3d.utility.Vector3dVector(points)
-        pcd.points.color = o3d.core.Tensor(img)
+        # # pcd.colors = o3d.utility.Vector3dVector(colors)
 
-
-        o3d.visualization.draw_geometries([pcd])
-        
+        # # Visualize the point cloud
+        # o3d.visualization.draw_geometries([pcd])
     
 
     if animate:
@@ -492,10 +551,6 @@ if __name__ == "__main__":
 
         # Display the animation
         plt.show()
-
-    
-
-
 
 
     ### Commands for trajectory replay ###
