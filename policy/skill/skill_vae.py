@@ -98,10 +98,11 @@ class TSkillCVAE(nn.Module):
         for n in (128, 64, 32):
             action_head.append(nn.Linear(nl, n)) 
             action_head.append(self.norm(n))
-            action_head.append(nn.LeakyReLU())
+            action_head.append(nn.GELU())
             nl = n
         self.dec_action_head = nn.Sequential(*action_head)
-        self.dec_action_joint_proj = nn.Linear(nl, action_dim-1) # Decode joint actions
+        self.dec_action_joint_proj = nn.Linear(nl, action_dim - 1) # Decode joint actions
+        # self.dec_action_joint_proj = nn.Sequential(nn.Linear(nl, action_dim - 1), nn.Tanhshrink())  # Decode joint actions
         # Decode gripper actions with a tanh to restrict between -1 and 1
         self.dec_action_gripper_proj = nn.Sequential(nn.Linear(nl, 1), nn.Tanh()) 
 
@@ -143,8 +144,9 @@ class TSkillCVAE(nn.Module):
                                     skill_pad_mask, seq_pad_mask, skill_mask, seq_mask)
 
         a_hat = a_hat.permute(1,0,2) # Shift back to (bs, seq, act_dim)
-        mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
-        logvar = logvar.permute(1,0,2)
+        if mu is not None:
+            mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
+            logvar = logvar.permute(1,0,2)
         return dict(a_hat=a_hat, mu=mu, logvar=logvar)
         
 
@@ -257,7 +259,7 @@ class TSkillCVAE(nn.Module):
         
         z = self.dec_z(z_sample) # (skill_seq, bs, hidden_dim)
         skill_seq, bs, _ = z.shape
-        seq = tgt_pad_mask.shape[-1]
+        seq = tgt_pad_mask.shape[-1] # TODO should this be how the target length is found?
 
         # obtain learned postition embedding for z, state, & img inputs
         dec_type_embed = self.input_embed.weight * self.input_embed_scale_factor

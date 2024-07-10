@@ -344,7 +344,12 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         override_indices = kwargs.get("indices", None)
         if override_indices is not None:
             print("Using override indices")
-            train_idx, val_idx = override_indices
+            train_mapping, val_mapping = override_indices
+            if all([i in data_info.keys() for i in ("action_scaling", "state_scaling")]):
+                print("Loading action and state scaling from file")
+                act_scaling = data_info["action_scaling"]
+                stt_scaling = data_info["state_scaling"]
+                recompute_scaling = False
         elif all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
             print(f"Loading indices from file: {path}")
             train_mapping = data_info["train_indices"]
@@ -450,9 +455,10 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 data_info["val_indices"] = val_mapping
 
         # Save updated data info file
-        print("Saving data info file")
-        with open(path,'wb') as f:
-            pickle.dump(data_info, f)
+        if recompute_scaling:
+            print("Saving data info file")
+            with open(path,'wb') as f:
+                pickle.dump(data_info, f)
 
         # Obtain augmentations
         if augment:
@@ -497,7 +503,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         return train_loader, val_loader
 
 
-class ScalingFunction():
+class ScalingFunction:
     def __init__(self, scaling, data, sep_idx=None) -> None:
         if isinstance(scaling, (int, float, list, tuple)):
             print("Computing linear scaling")

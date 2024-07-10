@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from policy import config
 from policy.checkpoints import CheckpointIO
-from policy.dataset.ms2dataset import get_MS_loaders, get_next_seq_timestep
+from policy.dataset.ms2dataset import get_MS_loaders
 from policy.skill.training import Trainer
 
 matplotlib.use("Agg")
@@ -108,7 +108,6 @@ def main(args):
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 5
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["visualize_total"] = 1000
         cfg["training"]["max_it"] = 20
 
     # Shorthands

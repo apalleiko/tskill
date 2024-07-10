@@ -1,7 +1,4 @@
-"""Replay the trajectory stored in HDF5.
-The replayed trajectory can use different observation modes and control modes.
-We support translating actions from certain controllers to a limited number of controllers.
-The script is only tested for Panda, and may include some Panda-specific hardcode.
+"""Imitate episodes for a model given a certain dataset.
 """
 
 import argparse
@@ -22,276 +19,16 @@ from tqdm.auto import tqdm
 from transforms3d.quaternions import quat2axangle
 import matplotlib.pyplot as plt
 
-import mani_skill2.envs
-from mani_skill2.agents.base_controller import CombinedController
 from mani_skill2.agents.controllers import *
 from mani_skill2.envs.sapien_env import BaseEnv
 from mani_skill2.trajectory.merge_trajectory import merge_h5
-from mani_skill2.utils.common import clip_and_scale_action, inv_scale_action
 from mani_skill2.utils.io_utils import load_json
-from mani_skill2.utils.sapien_utils import get_entity_by_name
 from mani_skill2.utils.wrappers import RecordEpisode
+from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
-from policy.dataset.ms2dataset import get_MS_loaders
+from policy.dataset.ms2dataset import get_MS_loaders, convert_observation, rescale_rgbd, get_skill_pad_from_seq_pad
 from policy.checkpoints import CheckpointIO
-
-
-def qpos_to_pd_joint_delta_pos(controller: PDJointPosController, qpos):
-    assert type(controller) == PDJointPosController
-    assert controller.config.use_delta
-    assert controller.config.normalize_action
-    delta_qpos = qpos - controller.qpos
-    low, high = controller.config.lower, controller.config.upper
-    return inv_scale_action(delta_qpos, low, high)
-
-
-def qpos_to_pd_joint_target_delta_pos(controller: PDJointPosController, qpos):
-    assert type(controller) == PDJointPosController
-    assert controller.config.use_delta
-    assert controller.config.use_target
-    assert controller.config.normalize_action
-    delta_qpos = qpos - controller._target_qpos
-    low, high = controller.config.lower, controller.config.upper
-    return inv_scale_action(delta_qpos, low, high)
-
-
-def qpos_to_pd_joint_vel(controller: PDJointVelController, qpos):
-    assert type(controller) == PDJointVelController
-    assert controller.config.normalize_action
-    delta_qpos = qpos - controller.qpos
-    qvel = delta_qpos * controller._control_freq
-    low, high = controller.config.lower, controller.config.upper
-    return inv_scale_action(qvel, low, high)
-
-
-def compact_axis_angle_from_quaternion(quat: np.ndarray) -> np.ndarray:
-    theta, omega = quat2axangle(quat)
-    # - 2 * np.pi to make the angle symmetrical around 0
-    if omega > np.pi:
-        omega = omega - 2 * np.pi
-    return omega * theta
-
-
-def delta_pose_to_pd_ee_delta(
-    controller: Union[PDEEPoseController, PDEEPosController],
-    delta_pose: sapien.Pose,
-    pos_only=False,
-):
-    assert isinstance(controller, PDEEPosController)
-    assert controller.config.use_delta
-    assert controller.config.normalize_action
-    low, high = controller._action_space.low, controller._action_space.high
-    if pos_only:
-        return inv_scale_action(delta_pose.p, low, high)
-    delta_pose = np.r_[
-        delta_pose.p,
-        compact_axis_angle_from_quaternion(delta_pose.q),
-    ]
-    return inv_scale_action(delta_pose, low, high)
-
-
-def from_pd_joint_pos_to_ee(
-    output_mode,
-    ori_actions,
-    ori_env: BaseEnv,
-    env: BaseEnv,
-    render=False,
-    pbar=None,
-    verbose=False,
-):
-    n = len(ori_actions)
-    if pbar is not None:
-        pbar.reset(total=n)
-
-    pos_only = not ("pose" in output_mode)
-    target_mode = "target" in output_mode
-
-    ori_controller: CombinedController = ori_env.agent.controller
-    controller: CombinedController = env.agent.controller
-
-    # NOTE(jigu): We need to track the end-effector pose in the original env,
-    # given target joint positions instead of current joint positions.
-    # Thus, we need to compute forward kinematics
-    pin_model = ori_controller.articulation.create_pinocchio_model()
-    ori_arm_controller: PDJointPosController = ori_controller.controllers["arm"]
-    arm_controller: PDEEPoseController = controller.controllers["arm"]
-    assert arm_controller.config.frame == "ee"
-    ee_link: sapien.Link = arm_controller.ee_link
-
-    info = {}
-
-    for t in range(n):
-        if pbar is not None:
-            pbar.update()
-
-        ori_action = ori_actions[t]
-        ori_action_dict = ori_controller.to_action_dict(ori_action)
-        output_action_dict = ori_action_dict.copy()  # do not in-place modify
-
-        # Keep the joint positions with all DoF
-        full_qpos = ori_controller.articulation.get_qpos()
-
-        ori_env.step(ori_action)
-
-        # Use target joint positions for arm only
-        full_qpos[ori_arm_controller.joint_indices] = ori_arm_controller._target_qpos
-        pin_model.compute_forward_kinematics(full_qpos)
-        target_ee_pose = pin_model.get_link_pose(arm_controller.ee_link_idx)
-
-        flag = True
-
-        for _ in range(2):
-            if target_mode:
-                prev_ee_pose_at_base = arm_controller._target_pose
-            else:
-                base_pose = arm_controller.articulation.pose
-                prev_ee_pose_at_base = base_pose.inv() * ee_link.pose
-
-            ee_pose_at_ee = prev_ee_pose_at_base.inv() * target_ee_pose
-            arm_action = delta_pose_to_pd_ee_delta(
-                arm_controller, ee_pose_at_ee, pos_only=pos_only
-            )
-
-            if (np.abs(arm_action[:3])).max() > 1:  # position clipping
-                if verbose:
-                    tqdm.write(f"Position action is clipped: {arm_action[:3]}")
-                arm_action[:3] = np.clip(arm_action[:3], -1, 1)
-                flag = False
-            if not pos_only:
-                if np.linalg.norm(arm_action[3:]) > 1:  # rotation clipping
-                    if verbose:
-                        tqdm.write(f"Rotation action is clipped: {arm_action[3:]}")
-                    arm_action[3:] = arm_action[3:] / np.linalg.norm(arm_action[3:])
-                    flag = False
-
-            output_action_dict["arm"] = arm_action
-            output_action = controller.from_action_dict(output_action_dict)
-
-            _, _, _, _, info = env.step(output_action)
-            if render:
-                env.render_human()
-
-            if flag:
-                break
-
-    return info
-
-
-def from_pd_joint_pos(
-    output_mode,
-    ori_actions,
-    ori_env: BaseEnv,
-    env: BaseEnv,
-    render=False,
-    pbar=None,
-    verbose=False,
-):
-    if "ee" in output_mode:
-        return from_pd_joint_pos_to_ee(**locals())
-
-    n = len(ori_actions)
-    if pbar is not None:
-        pbar.reset(total=n)
-
-    ori_controller: CombinedController = ori_env.agent.controller
-    controller: CombinedController = env.agent.controller
-
-    info = {}
-
-    for t in range(n):
-        if pbar is not None:
-            pbar.update()
-
-        ori_action = ori_actions[t]
-        ori_action_dict = ori_controller.to_action_dict(ori_action)
-        output_action_dict = ori_action_dict.copy()  # do not in-place modify
-
-        ori_env.step(ori_action)
-        flag = True
-
-        for _ in range(2):
-            if output_mode == "pd_joint_delta_pos":
-                arm_action = qpos_to_pd_joint_delta_pos(
-                    controller.controllers["arm"], ori_action_dict["arm"]
-                )
-            elif output_mode == "pd_joint_target_delta_pos":
-                arm_action = qpos_to_pd_joint_target_delta_pos(
-                    controller.controllers["arm"], ori_action_dict["arm"]
-                )
-            elif output_mode == "pd_joint_vel":
-                arm_action = qpos_to_pd_joint_vel(
-                    controller.controllers["arm"], ori_action_dict["arm"]
-                )
-            else:
-                raise NotImplementedError(
-                    f"Does not support converting pd_joint_pos to {output_mode}"
-                )
-
-            # Assume normalized action
-            if np.max(np.abs(arm_action)) > 1 + 1e-3:
-                if verbose:
-                    tqdm.write(f"Arm action is clipped: {arm_action}")
-                flag = False
-            arm_action = np.clip(arm_action, -1, 1)
-            output_action_dict["arm"] = arm_action
-
-            output_action = controller.from_action_dict(output_action_dict)
-            _, _, _, _, info = env.step(output_action)
-            if render:
-                env.render_human()
-
-            if flag:
-                break
-
-    return info
-
-
-def from_pd_joint_delta_pos(
-    output_mode,
-    ori_actions,
-    ori_env: BaseEnv,
-    env: BaseEnv,
-    render=False,
-    pbar=None,
-    verbose=False,
-):
-    n = len(ori_actions)
-    if pbar is not None:
-        pbar.reset(total=n)
-
-    ori_controller: CombinedController = ori_env.agent.controller
-    controller: CombinedController = env.agent.controller
-    ori_arm_controller: PDJointPosController = ori_controller.controllers["arm"]
-
-    assert output_mode == "pd_joint_pos", output_mode
-    assert ori_arm_controller.config.normalize_action
-    low, high = ori_arm_controller.config.lower, ori_arm_controller.config.upper
-
-    info = {}
-
-    for t in range(n):
-        if pbar is not None:
-            pbar.update()
-
-        ori_action = ori_actions[t]
-        ori_action_dict = ori_controller.to_action_dict(ori_action)
-        output_action_dict = ori_action_dict.copy()  # do not in-place modify
-
-        prev_arm_qpos = ori_arm_controller.qpos
-        delta_qpos = clip_and_scale_action(ori_action_dict["arm"], low, high)
-        arm_action = prev_arm_qpos + delta_qpos
-
-        ori_env.step(ori_action)
-
-        output_action_dict["arm"] = arm_action
-        output_action = controller.from_action_dict(output_action_dict)
-        _, _, _, _, info = env.step(output_action)
-
-        if render:
-            env.render_human()
-
-    return info
 
 
 def parse_args(args=None):
@@ -339,8 +76,29 @@ def parse_args(args=None):
     parser.add_argument(
         "--train",
         action="store_true",
-        help="whether to use training dataset of not. By default will use val.",
+        help="whether to use training dataset or not. By default will use val.",
     )
+    parser.add_argument(
+        "--true",
+        action="store_true",
+        help="whether to run at each time step of the sequence",
+    )
+    parser.add_argument(
+        "--eval",
+        action="store_true",
+        help="encode data or not. By default pass in demos.",
+    )
+    parser.add_argument(
+        "--full-seq",
+        action="store_true",
+        help="whether to run at each time step of the sequence",
+    )
+    parser.add_argument(
+        "--save-obs",
+        action="store_true",
+        help="whether to save the image observations seen during a full sequence run",
+    )
+
     return parser.parse_args(args)
 
 
@@ -357,11 +115,15 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["pad_train"] = False
     cfg["data"]["pad_val"] = False
     cfg["data"]["augment"] = False
-    cfg["data"]["action_scaling"] = "normal"
-    cfg["data"]["state_scaling"] = 1
+    cfg["data"]["full_seq"] = False
 
-    train_idx, val_idx = data_info["train_indices"], data_info["val_indices"]
-    train_dataset, val_dataset = get_MS_loaders(cfg, return_datasets=True)
+    # Load only the full episode version of the dataset
+    if "train_ep_indices" not in data_info.keys():
+        train_idx, val_idx = data_info["train_indices"], data_info["val_indices"]
+    else:
+        train_idx, val_idx = data_info["train_ep_indices"], data_info["val_ep_indices"]
+    train_dataset, val_dataset = get_MS_loaders(cfg, return_datasets=True, 
+                                                indices=(train_idx, val_idx))
     
     if not args.train:
         dataset = val_dataset
@@ -373,7 +135,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     # Model
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model.pt")
+    load_dict = checkpoint_io.load("model_best.pt")
     model.eval()
     # print(model)
 
@@ -390,6 +152,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     env_info = json_data["env_info"]
     env_id = env_info["env_id"]
     ori_env_kwargs = env_info["env_kwargs"]
+    max_episode_steps = env_info["max_episode_steps"]
 
     # Create a twin env with the original kwargs
     if args.target_control_mode is not None:
@@ -455,6 +218,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         print(f"Removing existing directory {tb_out_dir}")
         shutil.rmtree(tb_out_dir, ignore_errors=True)
     os.makedirs(tb_out_dir, exist_ok=True)
+
     # Replay
     for i in range(len(idxs)):
         ind = idxs[i]
@@ -475,8 +239,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             reset_kwargs["seed"] = ep["episode_seed"]
         seed = reset_kwargs.pop("seed")
 
-        ori_control_mode = ep["control_mode"]
-
         for _ in range(args.max_retry + 1):
             env.reset(seed=seed, options=reset_kwargs)
             if ori_env is not None:
@@ -485,79 +247,98 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             if args.vis:
                 env.render_human()
 
-            # Run model to get actions to replay
-            data = dataset[i]
-            with torch.no_grad():
-                out = model(data)
             true_actions = ori_h5_file[traj_id]["actions"]
-            a_hat = out["a_hat"].detach().cpu().squeeze()
-            a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
             ori_actions = []
-            for i in range(a_hat.shape[0]):
-                ori_actions.append(a_hat[i,:])
+            for k in range(true_actions.shape[0]):
+                    ori_actions.append(true_actions[k,:])
 
-            # Log action histograms
-            writer = SummaryWriter(tb_out_dir)
-            seq,_ = a_hat.shape
-            for i in range(seq):
-                v_i = a_hat[i,:]
-                a_i = true_actions[i,:]
-                if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
-                    writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
-                    writer.add_histogram(f'ep_{ind}_atrue', a_i, i)
-            writer.close()
+            # Run model to reconstruct actions
+            if not args.full_seq:
+                data = dataset[i]
+                if args.eval:
+                    data["actions"] = None
+                with torch.no_grad():
+                    out = model(data)
+                a_hat = out["a_hat"].detach().cpu().squeeze()
+                a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
+                pred_actions = []
+                for i in range(a_hat.shape[0]):
+                    pred_actions.append(a_hat[i,:])
 
-            # Plot image observations
-            # fig, (ax1, ax2) = plt.subplots(1, 2)
-            # img_idx = 55
-            # imgs = data["rgb"]
-            # ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
-            # ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
-            # plt.show()
-            # input()
-            # assert 1==0
+                # Log action histograms
+                # writer = SummaryWriter(tb_out_dir)
+                # seq,_ = a_hat.shape
+                # for i in range(seq):
+                #     v_i = a_hat[i,:]
+                #     a_i = true_actions[i,:]
+                #     if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
+                #         writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
+                #         writer.add_histogram(f'ep_{ind}_atrue', a_i, i)
+                # writer.close()
 
-            info = {}
-            num_unpad_seq = torch.sum(torch.logical_not(data["seq_pad_mask"]).to(torch.int16))
-            t0 = len(true_actions) - num_unpad_seq
-            ori_env_state = ori_h5_file[traj_id]["env_states"][1+t0]
-            env.set_state(ori_env_state)
+                info = {}
+                ori_env_state = ori_h5_file[traj_id]["env_states"][1]
+                env.set_state(ori_env_state)
 
-            # Without conversion between control modes
-            if target_control_mode is None:
-                n = len(ori_actions)
+                # Without conversion between control modes
+                n = len(pred_actions)
                 if pbar is not None:
                     pbar.reset(total=n)
-                for t, a in enumerate(ori_actions):
+
+                if args.true:
+                    actions = ori_actions
+                else:
+                    actions = pred_actions
+
+                for t, a in enumerate(actions):
                     if pbar is not None:
                         pbar.update()
                     _, _, _, _, info = env.step(a)
+
                     if args.vis:
                         env.render_human()
 
-            # From joint position to others
-            elif ori_control_mode == "pd_joint_pos":
-                info = from_pd_joint_pos(
-                    target_control_mode,
-                    ori_actions,
-                    ori_env,
-                    env,
-                    render=args.vis,
-                    pbar=pbar,
-                    verbose=args.verbose,
-                )
+            # Run model to predict actions based on current obs
+            else:
+                info = {}
+                img_obs = []
+                ori_env_state = ori_h5_file[traj_id]["env_states"][1]
+                env.set_state(ori_env_state)
+                obs, _, _, _, info = env.step(np.zeros_like(ori_actions[0]))
 
-            # From joint delta position to others
-            elif ori_control_mode == "pd_joint_delta_pos":
-                info = from_pd_joint_delta_pos(
-                    target_control_mode,
-                    ori_actions,
-                    ori_env,
-                    env,
-                    render=args.vis,
-                    pbar=pbar,
-                    verbose=args.verbose,
-                )
+                if pbar is not None:
+                    pbar.reset(total=max_episode_steps)
+                for t in range(max_episode_steps):
+                    if pbar is not None:
+                        pbar.update()
+                    
+                    num_steps_remaining = max_episode_steps - t
+                    seq_pad_mask = torch.zeros(num_steps_remaining)
+                    skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, model.max_skill_len)
+                    seq_pad_mask = seq_pad_mask.unsqueeze(0)
+                    skill_pad_mask = skill_pad_mask.unsqueeze(0)
+                    max_num_skills = torch.ceil(torch.tensor(num_steps_remaining / model.max_skill_len)).to(torch.int)
+                    o = convert_observation(obs, robot_state_only=True, pos_only=True)
+                    qpos = torch.from_numpy(o["state"]).float().unsqueeze(0).to(model._device)
+                    rgbd = o["rgbd"]
+                    rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
+                    img_obs.append(np.hstack((rgb[...,0],rgb[...,1])) * 255)
+                    rgb = torch.from_numpy(rgb).float().unsqueeze(0).permute((0, 4, 3, 1, 2)).unsqueeze(0) # (bs, seq, num_cams, channels, img_h, img_w)                         print(f"==>> rgb: {rgb}")
+                    img_src, img_pe = model.stt_encoder(rgb)
+                    latent = torch.zeros([max_num_skills, 1, model.z_dim], dtype=torch.float32).to(model._device)
+                    with torch.no_grad():
+                        a_hat = model.skill_decode(latent, qpos, (img_src[0,...],img_pe[0,...]), 
+                                                 skill_pad_mask, seq_pad_mask, None, None)
+                    a_hat = a_hat.detach().cpu().squeeze(1)
+                    a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
+
+                    if args.true:
+                        obs, _, _, _, info = env.step(ori_actions[t]) if t < len(ori_actions) else env.step(np.zeros_like(ori_actions[0]))
+                    else:
+                        obs, _, _, _, info = env.step(a_hat[0,:])
+
+                    if args.vis:
+                        env.render_human()
 
             success = info.get("success", False)
             if args.discard_timeout:
@@ -567,6 +348,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             if success or args.allow_failure:
                 env.flush_trajectory()
                 env.flush_video()
+                if args.save_obs:
+                    images_to_video(img_obs, output_dir, f"ep_{ind}_obs", 20, 10)
                 break
             else:
                 # Rollback episode id for failed attempts
@@ -574,7 +357,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 if args.verbose:
                     print("info", info)
         else:
-            tqdm.write(f"Episode {episode_id} is not replayed successfully. Skipping")
+            tqdm.write(f"Episode {episode_id} is not replayed successfully.")
 
     # Cleanup
     env.close()
