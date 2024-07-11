@@ -317,7 +317,7 @@ def main(args):
                     )
 
             # Plot gradient histograms
-            if visualize_every > 0 and (it % visualize_every) == 0:
+            if visualize_every > 0 and ((it % visualize_every) == 0 or it == 1):
                 acts = batch["actions"]
                 writer = SummaryWriter(tb_out_dir)
                 for name, param in model.named_parameters():

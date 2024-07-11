@@ -8,8 +8,7 @@ def freeze_network(network):
 
 def get_model(cfg, device=None):
     position_embedding = build_position_encoding(cfg)
-    return_interm_layers = cfg["masks"]
-    backbone = Backbone(cfg["backbone_name"], True, return_interm_layers, cfg["dilation"])
+    backbone = Backbone(cfg["backbone_name"], cfg["train"], False, False)
     joiner = Joiner(backbone, position_embedding).float()
     joiner.num_channels = backbone.num_channels
     joiner.to(device)

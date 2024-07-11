@@ -1,5 +1,5 @@
 method: skill
-notes: Run with MSL 10, 1 more dec layer and augmentation
+notes: 
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
   val_split: .1
@@ -28,7 +28,7 @@ model:
     dropout : 0.2
     nheads : 2
     dim_feedforward : 256 
-    enc_layers : 1
+    enc_layers : 2
     dec_layers : 2
     pre_norm : False  
   
@@ -37,22 +37,20 @@ model:
     nheads : 2
     dim_feedforward : 256 
     enc_layers : 2 
-    dec_layers : 3 
+    dec_layers : 2
     pre_norm : False 
   
   state_encoder:
     method: resnet
     backbone_name: resnet18
-    position_embedding: sine 
-    masks: False 
-    dilation: False 
+    position_embedding: sine
 
 loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/021
-  max_it: 3000
+  out_dir: out/PegInsertion/023
+  max_it: 6000
   batch_size: 16
   batch_size_val: 16
   print_every: 25
@@ -64,8 +62,8 @@ training:
   model_selection_mode: minimize
   n_workers: 0
   n_workers_val: 0
-  lr_state_encoder: 0.00
+  lr_state_encoder: 0.0001
   lr: 0.001
-  lr_decay: 0
+  lr_decay: 0.95
   weight_decay: 0.0001
   gradient_accumulation: 1
