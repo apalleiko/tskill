@@ -55,6 +55,9 @@ def get_model(cfg, device=None):
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
 
+    single_skill = cfg_model.get("single_skill",False)
+    decode_num = cfg_model.get("decode_num",False)
+
     model = TSkillCVAE(
         stt_encoder,
         encoder,
@@ -63,6 +66,8 @@ def get_model(cfg, device=None):
         action_dim=cfg_model["action_dim"],
         max_skill_len=cfg_model["max_skill_len"],
         z_dim=cfg_model["z_dim"],
+        single_skill=single_skill,
+        decode_num=decode_num,
         device=device
     )
 
