@@ -123,7 +123,7 @@ class Trainer(BaseTrainer):
 
         # Set (mu,std) to (0,1) for padded skill outputs
         mu = mu[kl_loss_mask]
-        std = (logvar / 2).exp()[kl_loss_mask]
+        std = (logvar[kl_loss_mask] / 2).exp()
         dist = torch.distributions.Normal(mu, std)
         loss_dict["kldiv_loss"] = self.kl_weights * normal_kl(dist, None).sum() / num_dist
 

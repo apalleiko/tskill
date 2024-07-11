@@ -56,7 +56,7 @@ def get_model(cfg, device=None):
         freeze_network(stt_encoder)
 
     single_skill = cfg_model.get("single_skill",False)
-    decode_num = cfg_model.get("decode_num",False)
+    decode_num = cfg_model.get("decode_num",1)
 
     model = TSkillCVAE(
         stt_encoder,

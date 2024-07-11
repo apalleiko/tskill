@@ -1,5 +1,5 @@
 method: skill
-notes: 
+notes: Same as previous, but with higher KL div. weight. Want to check gradients and training ability.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
   val_split: .1
@@ -20,9 +20,11 @@ data:
 model:
   state_dim : 9
   action_dim : 8
-  max_skill_len : 10
   z_dim : 64
   hidden_dim: 128
+  max_skill_len : 10
+  single_skill: True
+  decode_num: 1
   
   encoder:  
     dropout : 0.2
