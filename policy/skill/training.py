@@ -109,12 +109,12 @@ class Trainer(BaseTrainer):
 
         # Correct mask size and convert to (0,1) where 1 is attended
         action_loss_mask = seq_pad_mask.unsqueeze(-1).repeat(1, 1, act_dim)
-        action_loss_mask = torch.logical_not(action_loss_mask).to(torch.int16)
-        num_actions = torch.sum(action_loss_mask)
+        action_loss_mask = torch.logical_not(action_loss_mask)
+        num_actions = torch.sum(action_loss_mask.to(torch.int16))
         
         kl_loss_mask_not = skill_pad_mask.unsqueeze(-1).repeat(1,1,latent_dim).to(torch.int16)
-        kl_loss_mask = torch.logical_not(kl_loss_mask_not).to(torch.int16)
-        num_dist = torch.sum(kl_loss_mask)
+        kl_loss_mask = torch.logical_not(kl_loss_mask_not)
+        num_dist = torch.sum(kl_loss_mask.to(torch.int16))
 
         # Get model outputs
         out = self.model(data)
@@ -122,20 +122,20 @@ class Trainer(BaseTrainer):
         mu, logvar = out["mu"], out["logvar"]
 
         # Set (mu,std) to (0,1) for padded skill outputs
-        mu = mu * kl_loss_mask
-        std = (logvar / 2).exp() * kl_loss_mask + kl_loss_mask_not
+        mu = mu[kl_loss_mask]
+        std = (logvar / 2).exp()[kl_loss_mask]
         dist = torch.distributions.Normal(mu, std)
         loss_dict["kldiv_loss"] = self.kl_weights * normal_kl(dist, None).sum() / num_dist
 
         # Set target and pred actions to 0 for padded sequence outputs
-        a_hat = a_hat * action_loss_mask
-        loss_dict["act_loss"] = F.mse_loss(a_hat, a_targ, reduction="sum") / num_actions
+        a_hat_l = a_hat[action_loss_mask]
+        a_targ_l = a_targ[action_loss_mask]
+        loss_dict["act_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Compute some metrics
         # metric_dict["batch_mean_seq_len"] = num_actions / bs / act_dim
         # mean_targ_acts = torch.sum(a_targ, (0,1))/torch.sum(action_loss_mask, (0,1))
         # mean_pred_acts = torch.sum(a_hat, (0,1))/torch.sum(action_loss_mask, (0,1))
-        
         # for i in range(act_dim):
             # metric_dict[f"batch_mean_targ_acts_{i}"] = mean_targ_acts[i]
             # metric_dict[f"batch_mean_pred_acts_{i}"] = mean_pred_acts[i]
@@ -146,8 +146,7 @@ class Trainer(BaseTrainer):
             metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
 
         metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
-        metric_dict["batch_mean_std"] = torch.sum((logvar / 2).exp() * kl_loss_mask) / num_dist
-        
+        metric_dict["batch_mean_std"] = torch.sum(std) / num_dist
         metric_dict["ahat_vector_traj"] = a_hat
 
         for k,v in self.model.metrics.items():
