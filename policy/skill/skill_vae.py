@@ -79,14 +79,19 @@ class TSkillCVAE(nn.Module):
 
         ### Backbone
         self.stt_encoder = stt_encoder
-        self.image_feat_norm = self.norm([32, self.hidden_dim]) # Hardcoded
+        self.by_cam = self.stt_encoder.by_cam
+        if self.by_cam:
+            num_img_feats = 16 # HARDCODED
+        else:
+            num_img_feats = 32
+        self.image_feat_norm = self.norm([num_img_feats, self.hidden_dim]) # TODO???
 
         ### Encoder
         self.enc_action_proj = nn.Linear(action_dim, self.hidden_dim) # project action -> hidden
         self.enc_action_norm = self.norm(self.hidden_dim)
         self.enc_state_proj = nn.Linear(state_dim, self.hidden_dim)  # project qpos -> hidden
         self.enc_state_norm = self.norm(self.hidden_dim)
-        self.enc_image_proj = nn.Linear(32,1) #TODO Hardcoded
+        self.enc_image_proj = nn.Linear(num_img_feats,1) #TODO Hardcoded
         self.enc_src_norm = self.norm(self.hidden_dim)
         self.enc_tgt_norm = self.norm(self.hidden_dim)
 
@@ -140,7 +145,7 @@ class TSkillCVAE(nn.Module):
         skill_mask = None # data["skill_mask"][0,:,:].to(self._device)
 
         # Calculate image features # TODO input each cam to encoder
-        img_src, img_pe = self.stt_encoder(images) # (seq, bs, h*num_cam*w, c)
+        img_src, img_pe = self.stt_encoder(images) # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c) 
         img_src = self.image_feat_norm(img_src)
 
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
@@ -178,8 +183,12 @@ class TSkillCVAE(nn.Module):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         is_training = actions is not None # train or val
         bs, seq, _ = qpos.shape # Use bs for masking
-        img_feat, img_pe = img_info # (seq, bs, h*num_cam*w, c)
+        img_feat, img_pe = img_info # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c)
         max_num_skills = tgt_pad_mask.shape[1]
+        if self.by_cam:
+            num_cam = img_feat.shape[2]
+        else:
+            num_cam = 1
 
         # Get a batch mask for eliminating fully padded inputs during training
         batch_mask = torch.all(src_pad_mask, dim=1) 
@@ -203,17 +212,20 @@ class TSkillCVAE(nn.Module):
 
             # project img with local pe to correct size
             img_pe = img_pe * self.img_pe_scale_factor
-            img_src = (img_feat + img_pe) # TODO should this PE be scaled or changed?
-            img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, c, h*num_cam*w)
-            img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, c=hidden)
+            img_src = (img_feat + img_pe) # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c)
+            img_src = torch.transpose(img_src, -1, -2) # (seq, bs, c, h*num_cam*w) | (seq, bs, num_cam, c, h*w)
+            img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, c=hidden) | (seq, bs, num_cam, c=hidden)
+            if self.by_cam:
+                img_src = img_src.permute(0, 2, 1, 3) # (seq, num_cam, bs, hidden)
+                img_src = torch.vstack([img_src[:,m,...] for m in range(num_cam)]) # (seq*num_cam, bs, hidden)
             img_src = img_src + enc_type_embed[2, :, :] # add type 3 embedding
 
             # encoder src
-            enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # (3*seq, bs, hidden_dim)
+            enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # (3*seq, bs, hidden_dim) | ((2+num_cam)*seq, bs, hidden_dim)
             # obtain seq position embedding for input
             enc_src_pe = self.get_pos_table(seq) * self.enc_src_pos_scale_factor
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
-            enc_src_pe = enc_src_pe.repeat(3, bs, 1)  # (3*seq, bs, hidden_dim)
+            enc_src_pe = enc_src_pe.repeat((2+num_cam), bs, 1)  # ((2+num_cam)*seq, bs, hidden_dim) | ((2+num_cam)*seq, bs, hidden_dim)
             # Add and norm
             enc_src = enc_src + enc_src_pe
             enc_src = self.enc_src_norm(enc_src)
@@ -226,7 +238,7 @@ class TSkillCVAE(nn.Module):
             enc_tgt = self.enc_tgt_norm(enc_tgt)
 
             # Repeat same padding mask for new seq length (same pattern)
-            src_pad_mask = src_pad_mask.repeat(1,3) 
+            src_pad_mask = src_pad_mask.repeat(1,(2+num_cam)) 
             
             # TODO rehsape src_mask and tgt_mask
 
@@ -266,8 +278,10 @@ class TSkillCVAE(nn.Module):
                      src_mask=None, tgt_mask=None):
         """Decode a sequence of skills into actions based on current image state and robot position
         Currently is not autoregressive and has fixed skill mapping size"""
-        img_src, img_pe = img_info # (bs, h*num_cam*w, hidden)
-        assert len(img_src.shape) == 3, "img_src should be size (bs, h*num_cam*w, hidden)"
+        img_src, img_pe = img_info # (bs, h*num_cam*w, hidden) | (bs, num_cam, h*w, hidden)
+        if len(img_src.shape) == 4:
+            img_src = img_src.flatten(1,2)
+            img_pe = img_pe.flatten(1,2)
         
         z = self.dec_z(z_sample) # (skill_seq, bs, hidden_dim)
         skill_seq, bs, _ = z.shape

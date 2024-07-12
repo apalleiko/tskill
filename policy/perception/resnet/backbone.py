@@ -107,31 +107,37 @@ class Joiner(nn.Sequential):
     
 
 class ResnetStateEncoder(nn.Module):
-    def __init__(self, joiner, hidden_dim, **kwargs) -> None:
+    def __init__(self, joiner, hidden_dim, by_cam, **kwargs) -> None:
         super().__init__(**kwargs)
         self.backbone = joiner
         self.num_channels = joiner.num_channels
         self.hidden_dim = hidden_dim
         self.image_proj = nn.Conv2d(self.num_channels, self.hidden_dim, kernel_size=1)
-    
+        self.by_cam = by_cam
 
     def forward(self, images):
         """Get image observation features and position embeddings
-        - images: (bs, seq num_cam, channel, h, w)"""
+        - images: (bs, seq, num_cam, channel, h, w)"""
         img_seq_features = []
         img_seq_pos = []
+        num_cam = images.shape[1]
 
-        for t in range(images.shape[1]):
+        for t in range(num_cam):
             t_feat, t_pos = self.image_encode(images[:, t, ...])
             img_seq_features.append(t_feat)
             img_seq_pos.append(t_pos)
 
-        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, c, h*num_cam*w)
-        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, c, h*num_cam*w)
+        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, c, h*num_cam*w) or (seq, bs, num_cam, c, h*w)
+        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, c, h*num_cam*w) or (seq, 1, num_cam, c, h*w)
 
-        seq, bs, c, hw = img_src.shape
-        img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, h*num_cam*w, c) TODO Is this the right feature order?
-        img_pe = img_pos.permute(0, 1, 3, 2).repeat(1, bs, 1, 1)
+        bs = img_src.shape[1]
+
+        if not self.by_cam:    
+            img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, h*num_cam*w, c) TODO Is this the right feature order?
+            img_pe = img_pos.permute(0, 1, 3, 2).repeat(1, bs, 1, 1)
+        else:
+            img_src = img_src.permute(0, 1, 2, 4, 3) # (seq, bs, num_cam, h*w, c)
+            img_pe = img_pos.permute(0, 1, 2, 4, 3).repeat(1, bs, 1, 1, 1)
         
         return img_src, img_pe
 
@@ -147,13 +153,22 @@ class ResnetStateEncoder(nn.Module):
             pos = pos[0]
             all_cam_features.append(self.image_proj(features))
             all_cam_pos.append(pos)
-
-            # fold camera dimension into width dimension
-            feat = torch.cat(all_cam_features, axis=3) # (bs, hidden, h, num_cam*w)
-            pos = torch.cat(all_cam_pos, axis=3) 
-
-        # flatten
-        feat = feat.flatten(2) # (bs, hidden, h*num_cam*w)
-        pos = pos.flatten(2) # (1, hidden, h*num_cam*w)
         
+        if not self.by_cam:
+            # fold camera dimension into width dimension
+            feat = torch.cat(all_cam_features, dim=-1) # (bs, hidden, h, num_cam*w)
+            pos = torch.cat(all_cam_pos, dim=-1) # (1, hidden, h, num_cam*w)
+
+            # flatten
+            feat = feat.flatten(-2) # (bs, hidden, h*num_cam*w)
+            pos = pos.flatten(-2) # (1, hidden, h*num_cam*w)
+        else:
+            # stack camera dimension into new dimension
+            feat = torch.stack(all_cam_features, dim=1) # (bs, num_cam, hidden, h, w)
+            pos = torch.stack(all_cam_pos, dim=1) # (1, num_cam, hidden, h, w)
+
+            # flatten
+            feat = feat.flatten(-2) # (bs, num_cam, hidden, h*w)
+            pos = pos.flatten(-2) # (1, num_cam, hidden, h*w)
+
         return feat, pos        

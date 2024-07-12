@@ -46,6 +46,7 @@ model:
     method: resnet
     backbone_name: resnet18
     position_embedding: sine
+    by_cam: False
 
 loss:
   kl_weights: 0.0001

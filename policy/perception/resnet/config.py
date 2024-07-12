@@ -12,7 +12,8 @@ def get_model(cfg, device=None):
     joiner = Joiner(backbone, position_embedding).float()
     joiner.num_channels = backbone.num_channels
     joiner.to(device)
-    model = ResnetStateEncoder(joiner, cfg["hidden_dim"])
+    by_cam = cfg.get("by_cam", False) # Whether to return the images retaining a num_cam dimension
+    model = ResnetStateEncoder(joiner, cfg["hidden_dim"], by_cam)
 
     return model
 
