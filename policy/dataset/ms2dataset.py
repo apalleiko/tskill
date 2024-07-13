@@ -14,6 +14,7 @@ from mani_skill2.utils.common import flatten_state_dict
 import h5py
 import dill as pickle
 import sklearn.preprocessing as skp
+from torchvision.transforms import v2
 
 
 def tensor_to_numpy(x):
@@ -112,53 +113,6 @@ class ManiSkillDataset(Dataset):
         raise(NotImplementedError)
     
     def __getitem__(self, idx):
-        raise(NotImplementedError)
-
-
-class ManiSkillrgbdDataset(ManiSkillDataset):
-    def __init__(self, dataset_file: str, load_count=-1) -> None:
-        self.dataset_file = dataset_file
-        super().__init__(dataset_file)
-
-        self.obs_state = []
-        self.obs_rgbd = []
-        self.actions = []
-        self.total_frames = 0
-        if load_count == -1:
-            load_count = len(self.episodes)
-        for eps_id in tqdm(range(load_count)):
-            eps = self.episodes[eps_id]
-            trajectory = self.data[f"traj_{eps['episode_id']}"]
-            trajectory = load_h5_data(trajectory)
-
-            # convert the original raw observation with our batch-aware function
-            obs = convert_observation(trajectory["obs"])
-            # we use :-1 to ignore the last obs as terminal observations are included
-            # and they don't have actions
-            self.obs_rgbd.append(obs["rgbd"][:-1])
-            self.obs_state.append(obs["state"][:-1])
-            self.actions.append(trajectory["actions"])
-        self.obs_rgbd = np.vstack(self.obs_rgbd)
-        self.obs_state = np.vstack(self.obs_state)
-        self.actions = np.vstack(self.actions)
-
-    def __len__(self):
-        return len(self.obs_rgbd)
-
-    def __getitem__(self, idx):
-        action = torch.from_numpy(self.actions[idx]).float()
-        rgbd = self.obs_rgbd[idx]
-        # note that we rescale data on demand as opposed to storing the rescaled data directly
-        # so we can save a ton of space at the cost of a little extra compute
-        rgbd = rescale_rgbd(rgbd)
-        # permute data so that channels are the first dimension as PyTorch expects this
-        rgbd = torch.from_numpy(rgbd).float().permute((2, 0, 1))
-        state = torch.from_numpy(self.obs_state[idx]).float()
-        return dict(rgbd=rgbd, state=state), action
-    
-
-class ManiSkillstateDataset(ManiSkillDataset):
-    def __init__(self, dataset_file: str, load_count=-1) -> None:
         raise(NotImplementedError)
     
     
@@ -263,7 +217,11 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
 
 def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
     """Functions for generating a skill padding mask from a given sequence padding mask,
-    based on the max skill length from the config. Always adds the padding at the end"""
+    based on the max skill length from the config. Always adds the padding at the end.
+        - seq_pad: tensor (seq)
+        - max_skill_len: int
+    """
+
     max_num_skills = torch.ceil(torch.tensor(seq_pad.shape[0]/max_skill_len)).to(torch.int)
     num_unpad_seq = torch.sum(torch.logical_not(seq_pad).to(torch.int16))
     num_unpad_skills = torch.ceil(num_unpad_seq / max_skill_len) # get skills with relevant outputs TODO handle non divisible skill lengths
@@ -324,6 +282,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         max_seq_len = cfg_data.get("max_seq_len", 0)
         recompute_scaling = True # Whether recomputing action/state scaling is needed
         recompute_fullseq = False # Whether recomputing full sequence data map is needed
+        save_override = kwargs.get("save_override", False)
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
@@ -455,7 +414,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 data_info["val_indices"] = val_mapping
 
         # Save updated data info file
-        if recompute_scaling:
+        if recompute_scaling and not save_override:
             print("Saving data info file")
             with open(path,'wb') as f:
                 pickle.dump(data_info, f)
@@ -558,24 +517,45 @@ class DataAugmentation:
     def __init__(self, cfg) -> None:
         self.max_seq_len = cfg["data"]["max_seq_len"]
         self.max_skill_len = cfg["model"]["max_skill_len"]
-        self.masking_rate = cfg["data"]["augmentation"].get("masking_rate", 0)
-        self.subsequence_rate = cfg["data"]["augmentation"].get("subsequence_rate", 0)
+        self.by_cam = cfg["model"]["state_encoder"].get("by_cam", False)
+        self.single_skill = cfg["model"].get("single_skill", False)
+        cfg_aug = cfg["data"]["augmentation"]
+        self.subsequence_rate = cfg_aug.get("subsequence_rate", 0)
+        self.seq_masking_rate = cfg_aug.get("seq_masking_rate", 0)
+        self.type_masking_rate = cfg_aug.get("type_masking_rate", 0)
+        self.img_aug = cfg_aug.get("image_aug", 0)
+        self.input_noise = cfg_aug.get("input_noise", False)
 
     def __call__(self, data):
+        
+        if self.subsequence_rate > 0:
+            data = self.subsequence(data)
+
+        if self.img_aug > 0:
+            data = self.image_aug(data)
+
+        if self.seq_masking_rate > 0:
+            data = self.seq_masking(data)
+
+        if self.type_masking_rate > 0:
+            data = self.type_masking(data)
+
+        return data
+    
+    def subsequence(self, data):
         seq_pad_mask = data["seq_pad_mask"]
         num_unpad_seq = torch.sum(torch.logical_not(seq_pad_mask).to(torch.int16))
 
         val = torch.rand(1)
-        if self.subsequence_rate > val and self.subsequence_rate > 0:
+        if self.subsequence_rate > val:
             # Uniformly sample how much of the sequence to use for the batch
             # from 1 to entire (unpadded) seq
             num_seq = torch.randint(1, num_unpad_seq+1, (1,1)).squeeze()
 
             # Pick a random index to start at in the possible window
             # TODO Start at least max_skill_len away from the end of each demo in the batch?
-            # As is, it is biased towards smaller sequences
-            buffer = self.max_seq_len - num_unpad_seq
-            seq_idx_start = torch.randint(0, buffer+1, (1,1)).squeeze()
+            window = self.max_seq_len - num_unpad_seq
+            seq_idx_start = torch.randint(0, window+1, (1,1)).squeeze()
             seq_idx_end = seq_idx_start + num_seq
             
             # Reset "new" sequences to the beginning (for positional encodings)
@@ -591,28 +571,82 @@ class DataAugmentation:
             data["skill_pad_mask"][num_unpad_skills:] = True
             data["seq_pad_mask"][num_seq:] = True
 
-        if self.masking_rate > 0:
-            raise NotImplementedError # TODO
-
         return data
 
+    def image_aug(self, data):
+        """Image augmentation function for input images"""
+        n = data["rgb"].shape[0]
+        jit = v2.ColorJitter(.5, .5)
+        # gs = v2.Grayscale(3)
+        gb = v2.GaussianBlur(3)
+        re = v2.RandomErasing(0.5, (0.02,0.1))
+        ra = v2.RandomChoice([jit, gb, re], [self.img_aug, self.img_aug, self.img_aug])
 
-if __name__ == "__main__":
-    path = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
+        for m in range(n):
+            data["rgb"][m,...] = ra(data["rgb"][m,...]).clamp(0,1)
 
-    dataset = ManiSkillrgbSeqDataset(path, None, pad=False)
-    print("Length of Dataset: ",len(dataset))
+        return data
+    
+    def seq_masking(self, data):
+        """Encoder/decoder input sequence masking function
+        TODO mask based on unpadded inputs"""
+        if self.by_cam:
+            enc_inp_len = self.max_seq_len * (2 + data["rgb"].shape[2]) # HARDCODED
+        else:
+            enc_inp_len = self.max_seq_len * 3
+        enc_mask = torch.rand(enc_inp_len) < self.seq_masking_rate
+        enc_mask = torch.logical_not(enc_mask).unsqueeze(0).repeat(enc_inp_len, 1)
+        enc_mask = enc_mask.fill_diagonal_(False)
 
-    # obs, action = dataset[13]    
-    # # Plot image observations
-    # fig, (ax1, ax2) = plt.subplots(1, 2)
-    # img_idx = -22
-    # imgs = obs["rgb"]
-    # ax1.imshow(np.transpose(imgs[img_idx,0,:,:,:],(1,2,0)))
-    # ax2.imshow(np.transpose(imgs[img_idx,1,:,:,:],(1,2,0)))
-    # plt.show()
+        # Only mask image inputs to decoder (?)
+        dec_img_len = 16 * data["rgb"].shape[2] # HARDCODED 
+        dec_mask = torch.rand(dec_img_len) < self.seq_masking_rate
+        dec_mask = torch.logical_not(dec_mask)
+        if self.single_skill:
+            z_mask = torch.tensor(False)
+        else:
+            z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
+        stt_mask = torch.tensor(False)
+        dec_mask = torch.cat(stt_mask, dec_mask, z_mask)
+        dec_inp_len = dec_mask.shape
+        dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
+        dec_mask = dec_mask.fill_diagonal_(False)
+
+        data["enc_mask"] = enc_mask
+        data["dec_mask"] = dec_mask
+
+    def type_masking(self, data):
+        """Encoder/decoder type masking function. Always leaves at least 1 unmasked input type"""
+        if self.by_cam: # Consider masking cameras seperately
+            n_seq = 3 + data["rgb"].shape[2]
+        else:
+            n_seq = 4
+        type_mask = torch.rand(n_seq) < self.type_masking_rate
+        enc_inp_len = self.max_seq_len * (n_seq - 1)
+        enc_mask = torch.zeros(enc_inp_len).to(torch.bool)
+        for s in range(type_mask.shape-1):
+            if type_mask[s]:
+                enc_mask[s*self.max_seq_len:(s+1)*self.max_seq_len] = True
+        enc_mask = torch.logical_not(enc_mask).unsqueeze(0).repeat(enc_inp_len, 1)
+        enc_mask = enc_mask.fill_diagonal_(False)
+
+        # Only mask image inputs to decoder
+        dec_img_len = 16 * data["rgb"].shape[2] # HARDCODED
+        dec_mask = torch.zeros(dec_img_len).to(torch.bool)
+        if type_mask[-1]:
+            dec_mask = torch.logical_not(dec_mask)
+        if self.single_skill:
+            z_mask = torch.tensor(False)
+        else:
+            z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
+        stt_mask = torch.tensor(False)
+        dec_mask = torch.cat(stt_mask, dec_mask, z_mask)
+        dec_inp_len = dec_mask.shape
+        dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
+        dec_mask = dec_mask.fill_diagonal_(False)
+        pass
 
 
-    ### Commands for trajectory replay ###
-    # python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10
-    # python -m policy/dataset/replay_trajectory.py --traj-path data/demos/v0/rigid_body/StackCube-v0/trajectory.h5 --save-traj --obs-mode rgbd --target-control-mode pd_joint_delta_pos --num-procs 2 --cam-res 480
+### Commands for trajectory replay ###
+# python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10
+# python -m policy/dataset/replay_trajectory.py --traj-path data/demos/v0/rigid_body/StackCube-v0/trajectory.h5 --save-traj --obs-mode rgbd --target-control-mode pd_joint_delta_pos --num-procs 2 --cam-res 480

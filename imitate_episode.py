@@ -29,6 +29,7 @@ from mani_skill2.utils.visualization.misc import images_to_video
 from policy import config
 from policy.dataset.ms2dataset import get_MS_loaders, convert_observation, rescale_rgbd, get_skill_pad_from_seq_pad
 from policy.checkpoints import CheckpointIO
+from policy.skill.skill_vae import TSkillCVAE
 
 
 def parse_args(args=None):
@@ -94,6 +95,11 @@ def parse_args(args=None):
         help="whether to run at each time step of the sequence",
     )
     parser.add_argument(
+        "--by-skill",
+        action="store_true",
+        help="whether to fully execute each skill at a time before taking a new obs",
+        )
+    parser.add_argument(
         "--save-obs",
         action="store_true",
         help="whether to save the image observations seen during a full sequence run",
@@ -133,7 +139,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         print("Using Training Dataset")
 
     # Model
-    model = config.get_model(cfg, device="cpu")
+    model: TSkillCVAE = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
     load_dict = checkpoint_io.load("model_best.pt")
     model.eval()
@@ -225,6 +231,14 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         ep = episodes[ind]
         episode_id = ep["episode_id"]
         traj_id = f"traj_{episode_id}"
+
+        data = dataset[i]
+        if args.eval:
+            data["actions"] = None
+        
+        with torch.no_grad():
+            out = model(data)
+
         if pbar is not None:
             pbar.set_description(f"Replaying {traj_id}")
 
@@ -253,28 +267,12 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     ori_actions.append(true_actions[k,:])
 
             # Run model to reconstruct actions
-            if not args.full_seq:
-                data = dataset[i]
-                if args.eval:
-                    data["actions"] = None
-                with torch.no_grad():
-                    out = model(data)
+            if not args.full_seq or args.true:
                 a_hat = out["a_hat"].detach().cpu().squeeze()
                 a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
                 pred_actions = []
                 for i in range(a_hat.shape[0]):
                     pred_actions.append(a_hat[i,:])
-
-                # Log action histograms
-                # writer = SummaryWriter(tb_out_dir)
-                # seq,_ = a_hat.shape
-                # for i in range(seq):
-                #     v_i = a_hat[i,:]
-                #     a_i = true_actions[i,:]
-                #     if torch.nonzero(torch.from_numpy(a_i)).shape[0] > 0:
-                #         writer.add_histogram(f'ep_{ind}_ahat', v_i, i)
-                #         writer.add_histogram(f'ep_{ind}_atrue', a_i, i)
-                # writer.close()
 
                 info = {}
                 ori_env_state = ori_h5_file[traj_id]["env_states"][1]
@@ -300,6 +298,9 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
 
             # Run model to predict actions based on current obs
             else:
+                if args.eval:
+                    out["latent"] = torch.zeros(int(max_episode_steps/model.max_skill_len), 1, model.z_dim)
+
                 info = {}
                 img_obs = []
                 ori_env_state = ori_h5_file[traj_id]["env_states"][1]
@@ -309,15 +310,20 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 if pbar is not None:
                     pbar.reset(total=max_episode_steps)
                 for t in range(max_episode_steps):
+
                     if pbar is not None:
                         pbar.update()
                     
-                    num_steps_remaining = max_episode_steps - t
+                    if model.single_skill:
+                        num_steps_remaining = model.max_skill_len
+                    else:
+                        num_steps_remaining = max_episode_steps - t
+
                     seq_pad_mask = torch.zeros(num_steps_remaining)
                     skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, model.max_skill_len)
                     seq_pad_mask = seq_pad_mask.unsqueeze(0)
                     skill_pad_mask = skill_pad_mask.unsqueeze(0)
-                    max_num_skills = torch.ceil(torch.tensor(num_steps_remaining / model.max_skill_len)).to(torch.int)
+                    
                     o = convert_observation(obs, robot_state_only=True, pos_only=True)
                     qpos = torch.from_numpy(o["state"]).float().unsqueeze(0).to(model._device)
                     rgbd = o["rgbd"]
@@ -325,16 +331,26 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     img_obs.append(np.hstack((rgb[...,0],rgb[...,1])) * 255)
                     rgb = torch.from_numpy(rgb).float().unsqueeze(0).permute((0, 4, 3, 1, 2)).unsqueeze(0) # (bs, seq, num_cams, channels, img_h, img_w)                         print(f"==>> rgb: {rgb}")
                     img_src, img_pe = model.stt_encoder(rgb)
-                    latent = torch.zeros([max_num_skills, 1, model.z_dim], dtype=torch.float32).to(model._device)
-                    with torch.no_grad():
-                        a_hat = model.skill_decode(latent, qpos, (img_src[0,...],img_pe[0,...]), 
-                                                 skill_pad_mask, seq_pad_mask, None, None)
-                    a_hat = a_hat.detach().cpu().squeeze(1)
-                    a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
-
-                    if args.true:
-                        obs, _, _, _, info = env.step(ori_actions[t]) if t < len(ori_actions) else env.step(np.zeros_like(ori_actions[0]))
+                    
+                    
+                    t_sk = torch.floor(torch.tensor(t) / model.max_skill_len).to(torch.int)
+                    if model.single_skill:
+                        latent = out["latent"][t_sk:t_sk+model.decode_num,...]
                     else:
+                        latent = out["latent"][t_sk:,...]
+
+                    if latent.shape[0] == 0:
+                        break
+                    
+                    if args.by_skill and (t % model.max_skill_len != 0):
+                        obs, _, _, _, info = env.step(a_hat[t % model.max_skill_len,:])
+                    else:
+                        with torch.no_grad():
+                            a_hat = model.skill_decode(latent, qpos, (img_src[0,...],img_pe[0,...]), 
+                                                    skill_pad_mask, seq_pad_mask, None, None)
+                        a_hat = a_hat.detach().cpu().squeeze(1)
+                        a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
+
                         obs, _, _, _, info = env.step(a_hat[0,:])
 
                     if args.vis:

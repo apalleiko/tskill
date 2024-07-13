@@ -1,5 +1,5 @@
 method: skill
-notes: Same as previous, but with higher KL div. weight. Want to check gradients and training ability.
+notes: Hail mary. Changed a lot, mostly increased params and added augmentation.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
   val_split: .1
@@ -10,8 +10,11 @@ data:
   gripper_scaling: False
   augment: True
   augmentation:
-    subsequence_rate: 0.5
-    masking_rate: 0
+    subsequence_rate: 0.8
+    seq_masking_rate: 0
+    type_masking_rate: 0
+    image_aug: 0.5
+    input_noise: False
     val_augmentation: False
   max_count: 50
   indices:
@@ -20,17 +23,16 @@ data:
 model:
   state_dim : 9
   action_dim : 8
-  z_dim : 64
+  z_dim : 128
   hidden_dim: 128
   max_skill_len : 10
   single_skill: True
-  decode_num: 1
   
   encoder:  
     dropout : 0.2
     nheads : 2
     dim_feedforward : 256 
-    enc_layers : 2
+    enc_layers : 3
     dec_layers : 2
     pre_norm : False  
   
@@ -38,35 +40,35 @@ model:
     dropout : 0.2
     nheads : 2
     dim_feedforward : 256 
-    enc_layers : 2 
-    dec_layers : 2
+    enc_layers : 2
+    dec_layers : 3
     pre_norm : False 
   
   state_encoder:
     method: resnet
     backbone_name: resnet18
     position_embedding: sine
-    by_cam: False
+    by_cam: True
 
 loss:
-  kl_weights: 0.0001
+  kl_weights: 0.001
 
 training:
-  out_dir: out/PegInsertion/024
+  out_dir: out/PegInsertion/026
   max_it: 6000
-  batch_size: 16
-  batch_size_val: 16
+  batch_size: 10
+  batch_size_val: 10
   print_every: 25
   visualize_every: 100
   checkpoint_every: 100
-  validate_every: 150
+  validate_every: 100
   backup_every: 250
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 0
   n_workers_val: 0
-  lr_state_encoder: 0.0001
-  lr: 0.001
-  lr_decay: 0.95
+  lr_state_encoder: 0.00001
+  lr: 0.00003
+  lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 1
+  gradient_accumulation: 2
