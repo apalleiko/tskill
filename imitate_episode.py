@@ -335,7 +335,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     
                     t_sk = torch.floor(torch.tensor(t) / model.max_skill_len).to(torch.int)
                     if model.single_skill:
-                        latent = out["latent"][t_sk:t_sk+model.decode_num,...]
+                        latent = out["latent"][t_sk:t_sk+model.look_ahead,...]
                     else:
                         latent = out["latent"][t_sk:,...]
 

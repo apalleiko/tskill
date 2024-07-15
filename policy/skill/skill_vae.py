@@ -7,6 +7,7 @@ import numpy as np
 
 import IPython
 e = IPython.embed
+import dill as pickle
 
 
 def reparametrize(mu, logvar):
@@ -58,8 +59,8 @@ class TSkillCVAE(nn.Module):
         self._device = device
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.single_skill = single_skill # TODO
-        self.decode_num = 1 # TODO
+        self.single_skill = single_skill
+        self.look_ahead = 1 # TODO
         self.norm = nn.LayerNorm
         self.autoregressive = kwargs.get("autoregressive",False)
 
@@ -133,20 +134,26 @@ class TSkillCVAE(nn.Module):
             seq_pad_mask: Padding mask for input sequence (bs, seq)
             skill_pad_mask: Padding mask for skill sequence (bs, max_num_skills)
             
-            enc_mask: bs, (2+num_cam)*seq, (2+num_cam)*seq
-            skill_mask: bs, max_num_skills, max_num_skills
+            enc_mask: bs, (2+num_cam)*seq, "
+            dec_mask: bs, 2+16*num_cam, "
         """
         qpos = data["state"].to(self._device)
         images = data["rgb"].to(self._device)
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
-        seq_pad_mask = data["seq_pad_mask"].to(self._device)
-        skill_pad_mask = data["skill_pad_mask"].to(self._device)
+        seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
+        skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
         enc_mask = data.get("enc_mask", None)
         dec_mask = data.get("dec_mask", None)
         if enc_mask is not None:
-            enc_mask = enc_mask[0,...].to(self._device)
+            enc_mask = enc_mask.to(self._device, torch.bool)
+            # Reshape mask from (N,S,S) to (N*nhead,S,S) as expected by transformer
+            enc_mask = torch.cat([enc_mask[i:i+1,:,:].repeat(self.encoder.nhead,1,1) 
+                                  for i in range(enc_mask.shape[0])])
         if dec_mask is not None:
-            dec_mask = dec_mask[0,...].to(self._device)
+            dec_mask = dec_mask.to(self._device, torch.bool)
+            # Reshape mask from (N,S,S) to (N*nhead,S,S) as expected by transformer
+            dec_mask = torch.cat([dec_mask[i:i+1,:,:].repeat(self.decoder.nhead,1,1) 
+                                  for i in range(dec_mask.shape[0])])
 
         # Calculate image features
         img_src, img_pe = self.stt_encoder(images) # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c) 
@@ -155,7 +162,7 @@ class TSkillCVAE(nn.Module):
                                             seq_pad_mask, skill_pad_mask, 
                                             enc_mask, None) # (skill_seq, bs, latent_dim)
         
-        # Decode skills conditioned with state & image from "current" state
+        # Decode skills conditioned with conditional state & image info from current state
         if not self.single_skill:
             a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
                                         skill_pad_mask, seq_pad_mask, 
@@ -166,17 +173,19 @@ class TSkillCVAE(nn.Module):
             for sk in range(z.shape[0]):
                 # Get current time step and skill
                 t = sk*self.max_skill_len
-                tf = self.max_skill_len*(sk+self.decode_num)
-                sk_z = z[sk:sk + self.decode_num, :, :] # (skill_seq <= decode_num, bs, latent_dim)
-                sk_skill_pad_mask = skill_pad_mask[:, sk:sk+self.decode_num]
+                tf = self.max_skill_len*(sk+self.look_ahead)
+                sk_z = z[sk:sk + self.look_ahead, :, :] # (skill_seq <= decode_num, bs, latent_dim)
+                sk_skill_pad_mask = skill_pad_mask[:, sk:sk+self.look_ahead]
                 sk_seq_pad_mask = seq_pad_mask[:, t:tf]
-
+                # Decode current skill with conditional info
                 a_pred = self.skill_decode(sk_z, qpos[:,t,:], (img_src[t,...], img_pe[t,...]),
                                            sk_skill_pad_mask, sk_seq_pad_mask, 
                                            dec_mask, None) # (seq, bs, act_dim)
                 a_hat = torch.vstack((a_hat, a_pred))
                 if torch.any(torch.isnan(a_hat)):
-                    print(f"NaNs encountered during decoding! {a_hat.shape}")
+                    with open("ERROR_DATA.pickle",'+wb') as f:
+                        pickle.dump(data, f)
+                    raise ValueError, f"NaNs encountered during decoding! {a_hat.shape}"
 
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         if mu is not None:

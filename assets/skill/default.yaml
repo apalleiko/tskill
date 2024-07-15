@@ -1,5 +1,5 @@
 method: skill
-notes: Hail mary. Changed a lot, mostly increased params and added augmentation.
+notes: Same as previous but added type and seq aug.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
   val_split: .1
@@ -11,8 +11,8 @@ data:
   augment: True
   augmentation:
     subsequence_rate: 0.8
-    seq_masking_rate: 0
-    type_masking_rate: 0
+    seq_masking_rate: 0.2
+    type_masking_rate: 0.15
     image_aug: 0.5
     input_noise: False
     val_augmentation: False
@@ -25,7 +25,7 @@ model:
   action_dim : 8
   z_dim : 128
   hidden_dim: 128
-  max_skill_len : 10
+  max_skill_len: 20
   single_skill: True
   
   encoder:  
@@ -54,8 +54,8 @@ loss:
   kl_weights: 0.001
 
 training:
-  out_dir: out/PegInsertion/026
-  max_it: 6000
+  out_dir: out/PegInsertion/028
+  max_it: 8000
   batch_size: 10
   batch_size_val: 10
   print_every: 25

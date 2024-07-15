@@ -205,6 +205,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
                     seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask,
                     actions=actions)
         
+        # Some augmentation assumes masking
         if self.augmentation is not None:
             data = self.augmentation(data)
 
@@ -544,7 +545,7 @@ class DataAugmentation:
     
     def subsequence(self, data):
         seq_pad_mask = data["seq_pad_mask"]
-        num_unpad_seq = torch.sum(torch.logical_not(seq_pad_mask).to(torch.int16))
+        num_unpad_seq = torch.sum((~seq_pad_mask).to(torch.int16))
 
         val = torch.rand(1)
         if self.subsequence_rate > val:
@@ -588,63 +589,100 @@ class DataAugmentation:
         return data
     
     def seq_masking(self, data):
-        """Encoder/decoder input sequence masking function
-        TODO mask based on unpadded inputs"""
+        """Encoder/decoder input sequence masking function"""
         if self.by_cam:
-            enc_inp_len = self.max_seq_len * (2 + data["rgb"].shape[2]) # HARDCODED
+           n_seq = (2 + data["rgb"].shape[1]) # HARDCODED
         else:
-            enc_inp_len = self.max_seq_len * 3
+            n_seq = 3
+        enc_inp_len = self.max_seq_len * n_seq
+        # Randomly apply mask to each input item
         enc_mask = torch.rand(enc_inp_len) < self.seq_masking_rate
-        enc_mask = torch.logical_not(enc_mask).unsqueeze(0).repeat(enc_inp_len, 1)
+        enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
         enc_mask = enc_mask.fill_diagonal_(False)
 
-        # Only mask image inputs to decoder (?)
-        dec_img_len = 16 * data["rgb"].shape[2] # HARDCODED 
-        dec_mask = torch.rand(dec_img_len) < self.seq_masking_rate
-        dec_mask = torch.logical_not(dec_mask)
-        if self.single_skill:
-            z_mask = torch.tensor(False)
-        else:
-            z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
-        stt_mask = torch.tensor(False)
-        dec_mask = torch.cat(stt_mask, dec_mask, z_mask)
-        dec_inp_len = dec_mask.shape
-        dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
-        dec_mask = dec_mask.fill_diagonal_(False)
+        # # Don't mask image inputs to decoder?
+        # dec_img_len = 16 * data["rgb"].shape[1] # HARDCODED 
+        # dec_mask = torch.rand(dec_img_len) < self.seq_masking_rate
+        # if self.single_skill:
+        #     z_mask = torch.tensor([False])
+        # else:
+        #     z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
+        # stt_mask = torch.tensor([False])
+        # dec_mask = torch.cat((stt_mask, dec_mask, z_mask), 0)
+        # dec_inp_len = dec_mask.shape[0]
+        # dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
+        # dec_mask = dec_mask.fill_diagonal_(False)
 
         data["enc_mask"] = enc_mask
-        data["dec_mask"] = dec_mask
+        # data["dec_mask"] = dec_mask
+
+        # Check if mask + padding yield a fully masked input sequence
+        # If so, deactivate the input mask
+        if torch.all(data["seq_pad_mask"].repeat(n_seq) | data["enc_mask"][0,:]):
+            data["enc_mask"] = torch.zeros_like(data["enc_mask"])
+
+        return data
 
     def type_masking(self, data):
-        """Encoder/decoder type masking function. Always leaves at least 1 unmasked input type"""
+        """Encoder/decoder type masking function. 
+        Always leaves at least 1 unmasked input type."""
         if self.by_cam: # Consider masking cameras seperately
-            n_seq = 3 + data["rgb"].shape[2]
+            n_seq = 2 + data["rgb"].shape[1]
         else:
-            n_seq = 4
-        type_mask = torch.rand(n_seq) < self.type_masking_rate
-        enc_inp_len = self.max_seq_len * (n_seq - 1)
+            n_seq = 3 # (enc: 1 img, 1 act, 1 qpos; dec: 1 img, 1 qpos)
+        # Randomly apply mask to each input type (encoder img,act,qpos & decoder imgs)
+        enc_type_mask = torch.rand(n_seq) < self.type_masking_rate
+        # Unmask an input if all input masks are True
+        if torch.all(enc_type_mask):
+            i = torch.randint(0,n_seq,(1,1)).squeeze()
+            enc_type_mask[i] = False
+
+        enc_inp_len = self.max_seq_len * (n_seq)
         enc_mask = torch.zeros(enc_inp_len).to(torch.bool)
-        for s in range(type_mask.shape-1):
-            if type_mask[s]:
+        for s in range(enc_type_mask.shape[0]-1):
+            if enc_type_mask[s]:
                 enc_mask[s*self.max_seq_len:(s+1)*self.max_seq_len] = True
-        enc_mask = torch.logical_not(enc_mask).unsqueeze(0).repeat(enc_inp_len, 1)
+        enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
         enc_mask = enc_mask.fill_diagonal_(False)
 
-        # Only mask image inputs to decoder
-        dec_img_len = 16 * data["rgb"].shape[2] # HARDCODED
+        # Only mask image and/or qpos inputs to decoder
+        dec_type_mask = torch.rand(2) < self.type_masking_rate
+        dec_img_len = 16 * data["rgb"].shape[1] # HARDCODED
         dec_mask = torch.zeros(dec_img_len).to(torch.bool)
-        if type_mask[-1]:
-            dec_mask = torch.logical_not(dec_mask)
-        if self.single_skill:
-            z_mask = torch.tensor(False)
+        stt_mask = torch.tensor([False])
+        if dec_type_mask[0]:
+            dec_mask = ~dec_mask
+        if dec_type_mask[1]:
+            stt_mask = ~stt_mask
+
+        if self.single_skill: # Incompatible with look ahead
+            z_mask = torch.tensor([False])
         else:
             z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
-        stt_mask = torch.tensor(False)
-        dec_mask = torch.cat(stt_mask, dec_mask, z_mask)
-        dec_inp_len = dec_mask.shape
+        
+        # Same order as in cvae
+        dec_mask = torch.cat((stt_mask, dec_mask, z_mask), 0)
+        dec_inp_len = dec_mask.shape[0]
         dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
         dec_mask = dec_mask.fill_diagonal_(False)
-        pass
+
+        # Merge with existing masks if applicable
+        if "enc_mask" in data.keys():
+            data["enc_mask"] = data["enc_mask"] | enc_mask
+        else:
+            data["enc_mask"] = enc_mask
+
+        if "dec_mask" in data.keys():
+            data["dec_mask"] = data["dec_mask"] | dec_mask
+        else:
+            data["dec_mask"] = dec_mask
+
+        # Check if input mask + padding yields a fully masked input sequence
+        # If so, deactivate the input mask
+        if torch.all(data["seq_pad_mask"].repeat(n_seq) | data["enc_mask"][0,:]):
+            data["enc_mask"] = torch.zeros_like(data["enc_mask"])
+        
+        return data
 
 
 ### Commands for trajectory replay ###
