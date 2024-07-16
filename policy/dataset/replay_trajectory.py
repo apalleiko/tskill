@@ -27,7 +27,6 @@ from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.sapien_utils import get_entity_by_name
 from mani_skill2.utils.wrappers import RecordEpisode
 
-
 def qpos_to_pd_joint_delta_pos(controller: PDJointPosController, qpos):
     assert type(controller) == PDJointPosController
     assert controller.config.use_delta
@@ -293,7 +292,7 @@ def parse_args(args=None):
         "-c", "--target-control-mode", type=str, help="target control mode"
     )
     parser.add_argument(
-        "--cam-res", type=int, help="camera resolution"
+        "--cam-res", type=int, default=128, help="camera resolution"
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
@@ -363,8 +362,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         env_kwargs["obs_mode"] = target_obs_mode
     if target_control_mode is not None:
         env_kwargs["control_mode"] = target_control_mode
-    if cam_res is not None:
-        env_kwargs["camera_cfgs"] = dict(width=cam_res, height=cam_res)
+    env_kwargs["camera_cfgs"] = dict(width=cam_res, height=cam_res)
     env_kwargs["bg_name"] = args.bg_name
     env_kwargs[
         "render_mode"

@@ -104,6 +104,12 @@ def parse_args(args=None):
         action="store_true",
         help="whether to save the image observations seen during a full sequence run",
     )
+    parser.add_argument(
+        "--chunk",
+        type=int,
+        default=1,
+        help="amount to chunk action predictions, only works on full sequence",
+    )
 
     return parser.parse_args(args)
 
@@ -303,6 +309,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
 
                 info = {}
                 img_obs = []
+                chunk = {i: [] for i in range(max_episode_steps+args.chunk+model.max_skill_len)}
+                alpha = 0.5
                 ori_env_state = ori_h5_file[traj_id]["env_states"][1]
                 env.set_state(ori_env_state)
                 obs, _, _, _, info = env.step(np.zeros_like(ori_actions[0]))
@@ -350,8 +358,13 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                                                     skill_pad_mask, seq_pad_mask, None, None)
                         a_hat = a_hat.detach().cpu().squeeze(1)
                         a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
-
-                        obs, _, _, _, info = env.step(a_hat[0,:])
+                        for k in range(a_hat.shape[0]):
+                            chunk[t+k].append(a_hat[k,:]*alpha*(1-alpha)**k)
+                        if args.chunk > 1 and t >= args.chunk:
+                            a_t = np.sum(np.array(chunk[t][-args.chunk:]),axis=0)
+                        else:
+                            a_t = a_hat[0,:]
+                        obs, _, _, _, info = env.step(a_t)
 
                     if args.vis:
                         env.render_human()

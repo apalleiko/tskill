@@ -1,5 +1,5 @@
 method: skill
-notes: Same as previous but added type and seq aug.
+notes: Same as previous but increased skill length, seq mask rate, and dropout. Increased decoder heads to 4.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
   val_split: .1
@@ -29,7 +29,7 @@ model:
   single_skill: True
   
   encoder:  
-    dropout : 0.2
+    dropout : 0.4
     nheads : 2
     dim_feedforward : 256 
     enc_layers : 3
@@ -37,8 +37,8 @@ model:
     pre_norm : False  
   
   decoder:
-    dropout : 0.2
-    nheads : 2
+    dropout : 0.4
+    nheads : 4
     dim_feedforward : 256 
     enc_layers : 2
     dec_layers : 3
@@ -51,7 +51,7 @@ model:
     by_cam: True
 
 loss:
-  kl_weights: 0.001
+  kl_weights: 0.0001
 
 training:
   out_dir: out/PegInsertion/028

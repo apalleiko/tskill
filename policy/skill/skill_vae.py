@@ -185,7 +185,7 @@ class TSkillCVAE(nn.Module):
                 if torch.any(torch.isnan(a_hat)):
                     with open("ERROR_DATA.pickle",'+wb') as f:
                         pickle.dump(data, f)
-                    raise ValueError, f"NaNs encountered during decoding! {a_hat.shape}"
+                    raise ValueError(f"NaNs encountered during decoding! {a_hat.shape}")
 
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         if mu is not None:

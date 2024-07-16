@@ -626,6 +626,7 @@ class DataAugmentation:
     def type_masking(self, data):
         """Encoder/decoder type masking function. 
         Always leaves at least 1 unmasked input type."""
+        # Encoder input mask
         if self.by_cam: # Consider masking cameras seperately
             n_seq = 2 + data["rgb"].shape[1]
         else:
@@ -645,7 +646,7 @@ class DataAugmentation:
         enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
         enc_mask = enc_mask.fill_diagonal_(False)
 
-        # Only mask image and/or qpos inputs to decoder
+        # Decoder input mask, only mask image and/or qpos
         dec_type_mask = torch.rand(2) < self.type_masking_rate
         dec_img_len = 16 * data["rgb"].shape[1] # HARDCODED
         dec_mask = torch.zeros(dec_img_len).to(torch.bool)
@@ -679,7 +680,7 @@ class DataAugmentation:
 
         # Check if input mask + padding yields a fully masked input sequence
         # If so, deactivate the input mask
-        if torch.all(data["seq_pad_mask"].repeat(n_seq) | data["enc_mask"][0,:]):
+        if torch.sum(torch.logical_not(data["seq_pad_mask"].unsqueeze(0).repeat(enc_inp_len, n_seq) | data["enc_mask"]).to(torch.int)) < 10:
             data["enc_mask"] = torch.zeros_like(data["enc_mask"])
         
         return data
