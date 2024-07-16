@@ -1,7 +1,7 @@
 method: skill
-notes: Same as previous but increased skill length, seq mask rate, and dropout. Increased decoder heads to 4.
+notes: New dataset file.
 data:
-  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos2.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
@@ -54,7 +54,7 @@ loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/028
+  out_dir: out/PegInsertion/029
   max_it: 8000
   batch_size: 10
   batch_size_val: 10

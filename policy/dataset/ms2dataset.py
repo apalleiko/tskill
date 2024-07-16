@@ -30,10 +30,10 @@ def convert_observation(observation, robot_state_only, pos_only=True):
 
     # image data is not scaled here and is kept as uint16 to save space
     image_obs = observation["image"]
-    rgb = image_obs["base_camera"]["rgb"]
-    depth = image_obs["base_camera"]["depth"]
-    rgb2 = image_obs["hand_camera"]["rgb"]
-    depth2 = image_obs["hand_camera"]["depth"]
+    cams = []
+    for c in image_obs.keys():
+        cams.append(image_obs[c]["rgb"])
+        cams.append(image_obs[c]["depth"])
 
     # we provide a simple tool to flatten dictionaries with state data
     if robot_state_only:
@@ -55,7 +55,7 @@ def convert_observation(observation, robot_state_only, pos_only=True):
         )
 
     # combine the RGB and depth images
-    rgbd = np.concatenate([rgb, depth, rgb2, depth2], axis=-1)
+    rgbd = np.concatenate(cams, axis=-1)
     obs = dict(rgbd=rgbd, state=state)
     return obs
 
@@ -63,25 +63,24 @@ def convert_observation(observation, robot_state_only, pos_only=True):
 def rescale_rgbd(rgbd, scale_rgb_only=False, discard_depth=False,
                  separate_cams=False):
     # rescales rgbd data and changes them to floats
-    rgb1 = rgbd[..., 0:3] / 255.0
-    rgb2 = rgbd[..., 4:7] / 255.0
-    depth1 = rgbd[..., 3:4]
-    depth2 = rgbd[..., 7:8]
+    rgbs = []
+    depths = []
+    for i in range(int(rgbd.shape[-1]/4)):
+        rgbs.append(rgbd[..., 4*i:4*i+3] / 255.0)
+        depths.append(rgbd[..., 4*i+3:4*i+4])
     if not scale_rgb_only:
-        depth1 = rgbd[..., 3:4] / (2**10)
-        depth2 = rgbd[..., 7:8] / (2**10)
+        depths = [d / (2**10) for d in depths]
     
     if discard_depth:
         if separate_cams:
-            rgbd = np.stack([rgb1, rgb2], axis=-1)
+            rgbd = np.stack(rgbs, axis=-1)
         else:
-            rgbd = np.concatenate([rgb1, rgb2], axis=-1)
+            rgbd = np.concatenate(rgbs, axis=-1)
     else:
         if separate_cams:
-            rgbd = np.stack([np.concatenate([rgb1, depth1], axis=-1), 
-                             np.concatenate([rgb2, depth2], axis=-1)], axis=-1)
+            rgbd = np.stack([np.concatenate([rgbs[i], depths[i]], axis=-1) for i in range(len(rgbs))], axis=-1)
         else:
-            rgbd = np.concatenate([rgb1, depth1, rgb2, depth2], axis=-1)
+            rgbd = np.concatenate([np.concatenate([rgbs[i], depths[i]], axis=-1) for i in range(len(rgbs))], axis=-1)
 
     return rgbd
 
