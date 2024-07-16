@@ -1,5 +1,5 @@
 method: skill
-notes: New dataset file.
+notes: Extra cameras, no stt enc lr. Higher aug. Multiple skills, larger hidden dim, and no conditional info to decoder.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos2.h5
   val_split: .1
@@ -10,10 +10,10 @@ data:
   gripper_scaling: False
   augment: True
   augmentation:
-    subsequence_rate: 0.8
-    seq_masking_rate: 0.2
-    type_masking_rate: 0.15
-    image_aug: 0.5
+    subsequence_rate: 0.5
+    seq_masking_rate: 0.25
+    type_masking_rate: 0.33
+    image_aug: 0.75
     input_noise: False
     val_augmentation: False
   max_count: 50
@@ -24,20 +24,21 @@ model:
   state_dim : 9
   action_dim : 8
   z_dim : 128
-  hidden_dim: 128
-  max_skill_len: 20
+  hidden_dim: 256
+  max_skill_len: 10
   single_skill: True
+  conditional_decode: False
   
   encoder:  
     dropout : 0.4
-    nheads : 2
+    nheads : 4
     dim_feedforward : 256 
     enc_layers : 3
     dec_layers : 2
     pre_norm : False  
   
   decoder:
-    dropout : 0.4
+    dropout : 0.2
     nheads : 4
     dim_feedforward : 256 
     enc_layers : 2
@@ -55,9 +56,9 @@ loss:
 
 training:
   out_dir: out/PegInsertion/029
-  max_it: 8000
-  batch_size: 10
-  batch_size_val: 10
+  max_it: 10000
+  batch_size: 8
+  batch_size_val: 8
   print_every: 25
   visualize_every: 100
   checkpoint_every: 100
@@ -67,7 +68,7 @@ training:
   model_selection_mode: minimize
   n_workers: 0
   n_workers_val: 0
-  lr_state_encoder: 0.00001
+  lr_state_encoder: 0.0000
   lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001

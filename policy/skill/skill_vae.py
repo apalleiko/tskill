@@ -33,7 +33,7 @@ class TSkillCVAE(nn.Module):
                  encoder, decoder, 
                  state_dim, action_dim, 
                  max_skill_len, z_dim,
-                 single_skill, 
+                 single_skill, conditional_decode,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -45,6 +45,7 @@ class TSkillCVAE(nn.Module):
             max_skill_len: Max number of actions that can be predicted from a skill
             z_dim: dimension of latent skill vectors
             single_skill: bool whether to decode only 1 skill at a time
+            conditional_decode: bool whether to decode with image/qpos conditional info
             device: device to operate on
         kwargs:
             autoregressive: Whether skill generation and action decoding is autoregressive TODO
@@ -62,6 +63,7 @@ class TSkillCVAE(nn.Module):
         self.single_skill = single_skill
         self.look_ahead = 1 # TODO
         self.norm = nn.LayerNorm
+        self.conditional_decode = conditional_decode
         self.autoregressive = kwargs.get("autoregressive",False)
 
         ### Get a sinusoidal position encoding table for a given sequence size
@@ -338,8 +340,12 @@ class TSkillCVAE(nn.Module):
         z_src = z_src + dec_type_embed[3, :, :].repeat(skill_seq, 1, 1) # add type 4 embedding (skill_seq, bs, hidden_dim)
 
         # Concatenate full decoder src
-        dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z, bs, hidden)
-        dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0) 
+        if self.conditional_decode:
+            dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z, bs, hidden)
+            dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0) 
+        else:
+            dec_src = z_src # (z, bs, hidden)
+            dec_src_pe = z_pe
         # Add and norm
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)

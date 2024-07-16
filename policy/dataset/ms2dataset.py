@@ -519,6 +519,7 @@ class DataAugmentation:
         self.max_skill_len = cfg["model"]["max_skill_len"]
         self.by_cam = cfg["model"]["state_encoder"].get("by_cam", False)
         self.single_skill = cfg["model"].get("single_skill", False)
+        self.cond_dec = cfg["model"].get("conditional_decode", True)
         cfg_aug = cfg["data"]["augmentation"]
         self.subsequence_rate = cfg_aug.get("subsequence_rate", 0)
         self.seq_masking_rate = cfg_aug.get("seq_masking_rate", 0)
@@ -672,7 +673,9 @@ class DataAugmentation:
         else:
             data["enc_mask"] = enc_mask
 
-        if "dec_mask" in data.keys():
+        if not self.cond_dec:
+            pass
+        elif "dec_mask" in data.keys():
             data["dec_mask"] = data["dec_mask"] | dec_mask
         else:
             data["dec_mask"] = dec_mask
