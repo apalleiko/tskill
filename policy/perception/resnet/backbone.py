@@ -85,7 +85,7 @@ class Backbone(BackboneBase):
                  dilation: bool):
         backbone = getattr(torchvision.models, name)(
             replace_stride_with_dilation=[False, False, dilation],
-            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained # TODO do we want frozen batch_norm??
+            pretrained=is_main_process(), norm_layer=FrozenBatchNorm2d) # pretrained
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
@@ -107,37 +107,31 @@ class Joiner(nn.Sequential):
     
 
 class ResnetStateEncoder(nn.Module):
-    def __init__(self, joiner, hidden_dim, by_cam, **kwargs) -> None:
+    def __init__(self, joiner, hidden_dim, **kwargs) -> None:
         super().__init__(**kwargs)
         self.backbone = joiner
         self.num_channels = joiner.num_channels
         self.hidden_dim = hidden_dim
-        self.image_proj = nn.Conv2d(self.num_channels, self.hidden_dim, kernel_size=1)
-        self.by_cam = by_cam
 
     def forward(self, images):
         """Get image observation features and position embeddings
         - images: (bs, seq, num_cam, channel, h, w)"""
         img_seq_features = []
         img_seq_pos = []
-        num_cam = images.shape[1]
+        seq = images.shape[1]
 
-        for t in range(num_cam):
+        for t in range(seq):
             t_feat, t_pos = self.image_encode(images[:, t, ...])
             img_seq_features.append(t_feat)
             img_seq_pos.append(t_pos)
 
-        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, c, h*num_cam*w) or (seq, bs, num_cam, c, h*w)
-        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, c, h*num_cam*w) or (seq, 1, num_cam, c, h*w)
+        img_src = torch.stack(img_seq_features, axis=0) # (seq, bs, num_cam, c, h*w)
+        img_pos = torch.stack(img_seq_pos, axis=0) # (seq, 1, num_cam, hidden, h*w)
 
         bs = img_src.shape[1]
 
-        if not self.by_cam:    
-            img_src = img_src.permute(0, 1, 3, 2) # (seq, bs, h*num_cam*w, c) TODO Is this the right feature order?
-            img_pe = img_pos.permute(0, 1, 3, 2).repeat(1, bs, 1, 1)
-        else:
-            img_src = img_src.permute(0, 1, 2, 4, 3) # (seq, bs, num_cam, h*w, c)
-            img_pe = img_pos.permute(0, 1, 2, 4, 3).repeat(1, bs, 1, 1, 1)
+        img_src = img_src.permute(0, 1, 2, 4, 3) # (seq, bs, num_cam, h*w, c)
+        img_pe = img_pos.permute(0, 1, 2, 4, 3).repeat(1, bs, 1, 1, 1) # (seq, bs, num_cam, h*w, hidden)
         
         return img_src, img_pe
 
@@ -151,24 +145,14 @@ class ResnetStateEncoder(nn.Module):
             features, pos = self.backbone(image[:, cam, ...])
             features = features[0] # take the last layer feature (bs, c, h, w)
             pos = pos[0]
-            all_cam_features.append(self.image_proj(features))
+            all_cam_features.append(features) # (bs, c, h, w)
             all_cam_pos.append(pos)
         
-        if not self.by_cam:
-            # fold camera dimension into width dimension
-            feat = torch.cat(all_cam_features, dim=-1) # (bs, hidden, h, num_cam*w)
-            pos = torch.cat(all_cam_pos, dim=-1) # (1, hidden, h, num_cam*w)
+        feat = torch.stack(all_cam_features, dim=1) # (bs, num_cam, c, h, w)
+        pos = torch.stack(all_cam_pos, dim=1) # (1, num_cam, hidden, h, w)
 
-            # flatten
-            feat = feat.flatten(-2) # (bs, hidden, h*num_cam*w)
-            pos = pos.flatten(-2) # (1, hidden, h*num_cam*w)
-        else:
-            # stack camera dimension into new dimension
-            feat = torch.stack(all_cam_features, dim=1) # (bs, num_cam, hidden, h, w)
-            pos = torch.stack(all_cam_pos, dim=1) # (1, num_cam, hidden, h, w)
-
-            # flatten
-            feat = feat.flatten(-2) # (bs, num_cam, hidden, h*w)
-            pos = pos.flatten(-2) # (1, num_cam, hidden, h*w)
+        # flatten
+        feat = feat.flatten(-2) # (bs, num_cam, c, h*w)
+        pos = pos.flatten(-2) # (1, num_cam, hidden, h*w)
 
         return feat, pos        

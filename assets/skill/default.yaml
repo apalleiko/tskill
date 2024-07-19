@@ -1,7 +1,7 @@
 method: skill
-notes: Extra cameras, no stt enc lr. Higher aug. Multiple skills, larger hidden dim, and no conditional info to decoder.
+notes: Test continue training from 31 with 2 workers and precalculated image features.
 data:
-  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos2.h5
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
@@ -10,10 +10,10 @@ data:
   gripper_scaling: False
   augment: True
   augmentation:
-    subsequence_rate: 0.5
-    seq_masking_rate: 0.25
-    type_masking_rate: 0.33
-    image_aug: 0.75
+    subsequence_rate: 0.25
+    seq_masking_rate: 0.1
+    type_masking_rate: 0
+    image_aug: 0
     input_noise: False
     val_augmentation: False
   max_count: 50
@@ -30,17 +30,17 @@ model:
   conditional_decode: False
   
   encoder:  
-    dropout : 0.4
+    dropout : 0.1
     nheads : 4
-    dim_feedforward : 256 
+    dim_feedforward : 256
     enc_layers : 3
     dec_layers : 2
-    pre_norm : False  
+    pre_norm : False
   
   decoder:
-    dropout : 0.2
+    dropout : 0.1
     nheads : 4
-    dim_feedforward : 256 
+    dim_feedforward : 256
     enc_layers : 2
     dec_layers : 3
     pre_norm : False 
@@ -49,27 +49,27 @@ model:
     method: resnet
     backbone_name: resnet18
     position_embedding: sine
-    by_cam: True
 
 loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/029
+  out_dir: out/PegInsertion/032
   max_it: 10000
   batch_size: 8
   batch_size_val: 8
   print_every: 25
-  visualize_every: 100
-  checkpoint_every: 100
-  validate_every: 100
-  backup_every: 250
+  visualize_every: 200
+  checkpoint_every: 200
+  validate_every: 200
+  backup_every: 500
   model_selection_metric: act_loss
   model_selection_mode: minimize
-  n_workers: 0
-  n_workers_val: 0
+  n_workers: 2
+  n_workers_val: 2
   lr_state_encoder: 0.0000
   lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 2
+  gradient_accumulation: 1
+  use_precalc: True

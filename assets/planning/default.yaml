@@ -1,0 +1,44 @@
+method: plan
+notes:
+data:
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos2.h5
+  val_split: .1
+  preshuffle: False
+  max_seq_len: 200
+  augment: True
+  augmentation:
+    image_aug: 0.75
+  max_count: 50
+  indices:
+  full_seq: True
+
+model:
+  vae_path: 
+
+  hidden_dim: 256
+  dropout : 0.4
+  nheads : 4
+  dim_feedforward : 256 
+  enc_layers : 3
+  dec_layers : 2
+  pre_norm : False 
+
+training:
+  out_dir: out/PegInsertion/Plan/001
+  max_it: 10000
+  batch_size: 8
+  batch_size_val: 8
+  print_every: 25
+  visualize_every: 200
+  checkpoint_every: 200
+  validate_every: 200
+  backup_every: 500
+  model_selection_metric: act_loss
+  model_selection_mode: minimize
+  n_workers: 0
+  n_workers_val: 0
+  lr_state_encoder: 0.0000
+  lr: 0.00003
+  lr_decay: 0
+  weight_decay: 0.0001
+  gradient_accumulation: 2

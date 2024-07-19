@@ -1,4 +1,4 @@
-from .skill_vae import TSkillCVAE
+from .skill_plan import TSkillPlan
 from .training import Trainer
 import torch
 from torch import nn
@@ -29,6 +29,9 @@ def get_model(cfg, device=None):
     for name in ["state_encoder", "encoder", "decoder"]:
         cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
 
+    train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
+    cfg_model["state_encoder"]["train"] = True
+
     stt_encoder = get_stt_encoder(cfg_model["state_encoder"])
     encoder = build_transformer(cfg_model["encoder"])
     decoder = build_transformer(cfg_model["decoder"])
@@ -37,7 +40,6 @@ def get_model(cfg, device=None):
         is_cuda = torch.cuda.is_available()
         device = torch.device("cuda" if is_cuda else "cpu")
 
-    train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
     if not train_stt_encoder:
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
@@ -45,7 +47,7 @@ def get_model(cfg, device=None):
     single_skill = cfg_model.get("single_skill",False)
     cond_dec = cfg_model.get("conditional_decode",True)
 
-    model = TSkillCVAE(
+    model = TSkillPlan(
         stt_encoder,
         encoder,
         decoder,

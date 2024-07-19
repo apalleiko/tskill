@@ -6,7 +6,7 @@ from torch.nn import functional as F
 from tqdm import tqdm
 from policy.training import BaseTrainer
 
-from .skill_vae import TSkillCVAE
+from .skill_plan import TSkillPlan
 
 
 def normal_kl(a, b=None):
@@ -23,7 +23,7 @@ class Trainer(BaseTrainer):
     def __init__(
         self,
         cfg,
-        model: TSkillCVAE,
+        model: TSkillPlan,
         optimizer,
         device=None,
         scheduler=None
@@ -36,14 +36,6 @@ class Trainer(BaseTrainer):
         self.optimizer = optimizer
         self.device = device
         self.scheduler = scheduler
-
-        self.kl_weights = cfg["loss"]["kl_weights"]
-        self.gradient_accumulation = cfg["training"].get("gradient_accumulation",1)
-        aug_cond = not cfg["data"]["augmentation"].get("image_aug",0) or not cfg["data"]["augment"]
-        stt_cond = not cfg["training"]["lr_state_encoder"] and cfg["model"]["state_encoder"].get("backbone_name",None) == "resnet18"
-        self.use_precalc = cfg["training"].get("use_precalc",False)
-        if self.use_precalc:
-            assert aug_cond and stt_cond
 
     def epoch_step(self):
         if self.scheduler is not None and self.epoch_it > 0:
@@ -117,20 +109,10 @@ class Trainer(BaseTrainer):
         action_loss_mask = torch.logical_not(action_loss_mask)
         num_actions = torch.sum(action_loss_mask.to(torch.int16))
         
-        kl_loss_mask_not = skill_pad_mask.unsqueeze(-1).repeat(1,1,latent_dim).to(torch.int16)
-        kl_loss_mask = torch.logical_not(kl_loss_mask_not)
-        num_dist = torch.sum(kl_loss_mask.to(torch.int16))
-
         # Get model outputs
-        out = self.model(data, use_precalc=self.use_precalc)
+        out = self.model(data)
         a_hat = out["a_hat"]
-        mu, logvar = out["mu"], out["logvar"]
-
-        # Set (mu,std) to (0,1) for padded skill outputs
-        mu = mu[kl_loss_mask]
-        std = (logvar[kl_loss_mask] / 2).exp()
-        dist = torch.distributions.Normal(mu, std)
-        loss_dict["kldiv_loss"] = self.kl_weights * normal_kl(dist, None).sum() / num_dist
+        z_hat = out["z_hat"]
 
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
@@ -150,8 +132,6 @@ class Trainer(BaseTrainer):
             metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
             metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
 
-        metric_dict["batch_mean_mu"] = torch.sum(mu) / num_dist
-        metric_dict["batch_mean_std"] = torch.sum(std) / num_dist
         metric_dict["ahat_vector_traj"] = a_hat
 
         for k,v in self.model.metrics.items():

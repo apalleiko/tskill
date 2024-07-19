@@ -27,14 +27,6 @@ def tensor_to_numpy(x):
 def convert_observation(observation, robot_state_only, pos_only=True):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
-
-    # image data is not scaled here and is kept as uint16 to save space
-    image_obs = observation["image"]
-    cams = []
-    for c in image_obs.keys():
-        cams.append(image_obs[c]["rgb"])
-        cams.append(image_obs[c]["depth"])
-
     # we provide a simple tool to flatten dictionaries with state data
     if robot_state_only:
         if pos_only:
@@ -53,10 +45,20 @@ def convert_observation(observation, robot_state_only, pos_only=True):
                 flatten_state_dict(observation["extra"]),
             ]
         )
+    obs = dict(state=state)
 
-    # combine the RGB and depth images
-    rgbd = np.concatenate(cams, axis=-1)
-    obs = dict(rgbd=rgbd, state=state)
+    # image data is not scaled here and is kept as uint16 to save space
+    if "image" in observation.keys():
+        image_obs = observation["image"]
+        cams = []
+        # combine the RGB and depth images
+        for c in image_obs.keys():
+            cams.append(image_obs[c]["rgb"])
+            cams.append(image_obs[c]["depth"])
+
+        rgbd = np.concatenate(cams, axis=-1)
+        obs["rgbd"] = rgbd
+        
     return obs
 
 
@@ -122,7 +124,8 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
                  max_seq_len: int = 200, max_skill_len: int = 10, 
                  pad: bool=True, augmentation=None,
                  action_scaling=None, state_scaling=None,
-                 full_seq: bool = True) -> None:
+                 full_seq: bool = True,
+                 **kwargs) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -138,6 +141,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.pad = pad
         self.augmentation = augmentation
         self.full_seq = full_seq
+        self.add_batch_dim = kwargs.get("add_batch_dim",False)
 
         if action_scaling is None:
             self.action_scaling = lambda x: x
@@ -173,42 +177,59 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim) 
 
-        rgbd = obs["rgbd"][:-1]
-        rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
-        rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
+        if "resnet18" in trajectory["obs"].keys():
+            use_precalc = True
+            img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+        else:
+            use_precalc = False
+            rgbd = obs["rgbd"][:-1]
+            rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
+            rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
 
         # Add padding to sequences to match lengths and generate padding masks
         if self.pad:
-            num_unpad_seq = rgb.shape[0]
+            num_unpad_seq = actions.shape[0]
             pad = self.max_seq_len - num_unpad_seq
-            seq_pad_mask = torch.cat((torch.zeros(rgb.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
+            seq_pad_mask = torch.cat((torch.zeros(actions.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
 
-            rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
             state_pad = torch.zeros([pad] + list(state.shape[1:]))
-            act_pad = torch.zeros([pad] + list(actions.shape[1:]))
-            
-            rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
-            actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
             state = torch.cat((state, state_pad), axis=0).to(torch.float32)
-        else: # If not padding, this is being passed directly to model. 
-            seq_pad_mask = torch.zeros(rgb.shape[0]).to(torch.bool)
+            
+            act_pad = torch.zeros([pad] + list(actions.shape[1:]))
+            actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
+            
+            if use_precalc:
+                img_feat_pad = torch.zeros([pad] + list(img_feat.shape[1:]))
+                img_feat = torch.cat((img_feat, img_feat_pad), axis=0).to(torch.float32)
+                img_pe_pad = torch.zeros([pad] + list(img_pe.shape[1:]))
+                img_pe = torch.cat((img_pe, img_pe_pad), axis=0).to(torch.float32)
+            else:
+                rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
+                rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
+                
+        else: # If not padding, this is being passed directly to model.
+            seq_pad_mask = torch.zeros(actions.shape[0]).to(torch.bool)
         
         # Infer skill padding mask from input sequence mask
         skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, self.max_skill_len)
-            
-        # Assume no masking TODO
-        # seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
-        # skill_mask = torch.zeros(skill_pad_mask.shape[-1], skill_pad_mask.shape[-1]).to(torch.bool)
 
-        data = dict(rgb=rgb, state=state, 
+        data = dict(state=state, 
                     seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask,
                     actions=actions)
         
+        # Add precalculated features to data if applicable
+        if use_precalc:
+            data["img_feat"] = img_feat
+            data["img_pe"] = img_pe
+        else:
+            data["rgb"] = rgb
+
         # Some augmentation assumes masking
         if self.augmentation is not None:
             data = self.augmentation(data)
 
-        if not self.pad: # Add extra dimension for batch size as model expects this.
+        if self.add_batch_dim: # Add extra dimension for batch size as model expects this.
             for k,v in data.items():
                 data[k] = v.unsqueeze(0)
 
@@ -430,30 +451,34 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_augmentation = None
             val_augmentation = None
 
-        # Get padding config
-        pad_train = cfg_data.get("pad_train", True)
-        pad_val = cfg_data.get("pad_val", True)
+        # Get extra configs
+        pad = cfg_data.get("pad", True)
+        return_dataset = kwargs.get("return_datasets", False)
+        override_batch_dim = kwargs.get("add_batch_dim",False)
+        add_batch_dim = not pad or return_dataset or override_batch_dim
+        if add_batch_dim:
+            print("Adding batch dimension to returned data!")
 
         # Create datasets
         train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_mapping, 
                                                max_seq_len, max_skill_len,
-                                               pad_train, train_augmentation,
+                                               pad, train_augmentation,
                                                act_scaling, stt_scaling,
-                                               full_seq)
+                                               full_seq, add_batch_dim=add_batch_dim)
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_mapping, 
                                              max_seq_len, max_skill_len,
-                                             pad_val, val_augmentation,
+                                             pad, val_augmentation,
                                              act_scaling, stt_scaling,
-                                             full_seq)
+                                             full_seq, add_batch_dim=add_batch_dim)
 
-        if kwargs.get("return_datasets", False):
+        if return_dataset:
             return train_dataset, val_dataset
 
         # Create loaders
         shuffle = kwargs.get("shuffle", True)
         print(f"Shuffling: {shuffle}")
         train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
-                                   num_workers=cfg["training"]["n_workers"], 
+                                   num_workers=cfg["training"]["n_workers"],
                                    pin_memory=True, drop_last=False, shuffle=shuffle)
         val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
                                  num_workers=cfg["training"]["n_workers_val"], 
@@ -517,7 +542,6 @@ class DataAugmentation:
     def __init__(self, cfg) -> None:
         self.max_seq_len = cfg["data"]["max_seq_len"]
         self.max_skill_len = cfg["model"]["max_skill_len"]
-        self.by_cam = cfg["model"]["state_encoder"].get("by_cam", False)
         self.single_skill = cfg["model"].get("single_skill", False)
         self.cond_dec = cfg["model"].get("conditional_decode", True)
         cfg_aug = cfg["data"]["augmentation"]
@@ -555,13 +579,13 @@ class DataAugmentation:
 
             # Pick a random index to start at in the possible window
             # TODO Start at least max_skill_len away from the end of each demo in the batch?
-            window = self.max_seq_len - num_unpad_seq
+            window = num_unpad_seq - num_seq
             seq_idx_start = torch.randint(0, window+1, (1,1)).squeeze()
             seq_idx_end = seq_idx_start + num_seq
             
             # Reset "new" sequences to the beginning (for positional encodings)
             for k,v in data.items():
-                if k not in ("skill_pad_mask", "skill_mask", "seq_pad_mask"):
+                if k not in ("skill_pad_mask", "seq_pad_mask"):
                     new_seq = torch.zeros_like(v)
                     new_seq[:num_seq,...] = v[seq_idx_start:seq_idx_end,...]
                     data[k] = new_seq
@@ -590,11 +614,13 @@ class DataAugmentation:
     
     def seq_masking(self, data):
         """Encoder/decoder input sequence masking function"""
-        if self.by_cam:
-           n_seq = (2 + data["rgb"].shape[1]) # HARDCODED
-        else:
-            n_seq = 3
+        if "rgb" in data.keys():
+            n_cam = data["rgb"].shape[1]
+        elif "img_feat" in data.keys():
+            n_cam = data["img_feat"].shape[1]
+        n_seq = (2 + n_cam) # HARDCODED
         enc_inp_len = self.max_seq_len * n_seq
+
         # Randomly apply mask to each input item
         enc_mask = torch.rand(enc_inp_len) < self.seq_masking_rate
         enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
@@ -626,11 +652,11 @@ class DataAugmentation:
     def type_masking(self, data):
         """Encoder/decoder type masking function. 
         Always leaves at least 1 unmasked input type."""
-        # Encoder input mask
-        if self.by_cam: # Consider masking cameras seperately
-            n_seq = 2 + data["rgb"].shape[1]
-        else:
-            n_seq = 3 # (enc: 1 img, 1 act, 1 qpos; dec: 1 img, 1 qpos)
+        if "rgb" in data.keys():
+            n_cam = data["rgb"].shape[1]
+        elif "img_feat" in data.keys():
+            n_cam = data["img_feat"].shape[1]
+        n_seq = (2 + n_cam) # HARDCODED
         # Randomly apply mask to each input type (encoder img,act,qpos & decoder imgs)
         enc_type_mask = torch.rand(n_seq) < self.type_masking_rate
         # Unmask an input if all input masks are True
@@ -648,7 +674,7 @@ class DataAugmentation:
 
         # Decoder input mask, only mask image and/or qpos
         dec_type_mask = torch.rand(2) < self.type_masking_rate
-        dec_img_len = 16 * data["rgb"].shape[1] # HARDCODED
+        dec_img_len = 16 * n_cam # HARDCODED
         dec_mask = torch.zeros(dec_img_len).to(torch.bool)
         stt_mask = torch.tensor([False])
         if dec_type_mask[0]:

@@ -108,7 +108,7 @@ def main(args):
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 5
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 2
+        cfg["training"]["max_it"] = 20
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -261,7 +261,7 @@ def main(args):
                 writer.close()
 
             # Print output
-            if (it % print_every) == 0:
+            if it == 1 or (it % print_every) == 0:
                 t_elapsed = time.time() - t0
                 t_eta = (t_elapsed * (max_it / trainer.step_it)) - t_elapsed
                 t_eta = datetime.timedelta(seconds=t_eta)
