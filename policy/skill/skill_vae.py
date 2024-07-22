@@ -163,10 +163,6 @@ class TSkillCVAE(nn.Module):
             images = data["rgb"].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
 
-        img_src = self.image_proj(img_src) # (seq, bs, num_cam, h*w, hidden)
-        img_src = self.image_feat_norm(img_src)
-        img_pe = img_pe * self.img_pe_scale_factor
-
         # Encode inputs to latent
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
                                             seq_pad_mask, skill_pad_mask, 
@@ -235,7 +231,10 @@ class TSkillCVAE(nn.Module):
             qpos_src = qpos_src + enc_type_embed[1, :, :] # add type 2 embedding
 
             # project img with local pe to correct size
-            img_src = (img_feat + img_pe) # (seq, bs, num_cam, h*w, hidden)
+            img_src = self.image_proj(img_feat) # (seq, bs, num_cam, h*w, hidden)
+            img_src = self.image_feat_norm(img_src)
+            img_pe = img_pe * self.img_pe_scale_factor
+            img_src = (img_src + img_pe) # (seq, bs, num_cam, h*w, hidden)
             img_src = torch.transpose(img_src, -1, -2) # (seq, bs, num_cam, hidden, h*w)
             img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, num_cam, hidden)
             img_src = img_src.permute(0, 2, 1, 3) # (seq, num_cam, bs, hidden)
@@ -298,7 +297,10 @@ class TSkillCVAE(nn.Module):
                      src_mask=None, tgt_mask=None):
         """Decode a sequence of skills into actions based on current image state and robot position
         Currently is not autoregressive and has fixed skill mapping size"""
-        img_src, img_pe = img_info # (bs, num_cam, h*w, hidden)
+        img_src, img_pe = img_info # (bs, num_cam, h*w, c/hidden)
+        img_src = self.image_proj(img_src) # (bs, num_cam, h*w, hidden)
+        img_src = self.image_feat_norm(img_src)
+        img_pe = img_pe * self.img_pe_scale_factor
         img_src = img_src.flatten(1,2) # (bs, num_cam*h*w, hidden)
         img_pe = img_pe.flatten(1,2)
         

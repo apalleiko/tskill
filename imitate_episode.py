@@ -128,6 +128,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["pad_val"] = False
     cfg["data"]["augment"] = False
     cfg["data"]["full_seq"] = False
+    use_precalc = cfg["training"].get("use_precalc",False)
 
     # Load only the full episode version of the dataset
     if "train_ep_indices" not in data_info.keys():
@@ -243,7 +244,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             data["actions"] = None
         
         with torch.no_grad():
-            out = model(data)
+            out = model(data, use_precalc=use_precalc)
 
         if pbar is not None:
             pbar.set_description(f"Replaying {traj_id}")

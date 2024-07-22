@@ -176,7 +176,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim) 
-
+        
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)

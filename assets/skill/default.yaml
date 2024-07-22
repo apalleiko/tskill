@@ -1,5 +1,5 @@
 method: skill
-notes: Test continue training from 31 with 2 workers and precalculated image features.
+notes: Test continue training from 32 with lower lr.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -10,7 +10,7 @@ data:
   gripper_scaling: False
   augment: True
   augmentation:
-    subsequence_rate: 0.25
+    subsequence_rate: 0.33
     seq_masking_rate: 0.1
     type_masking_rate: 0
     image_aug: 0
@@ -27,7 +27,7 @@ model:
   hidden_dim: 256
   max_skill_len: 10
   single_skill: True
-  conditional_decode: False
+  conditional_decode: True
   
   encoder:  
     dropout : 0.1
@@ -54,8 +54,8 @@ loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/032
-  max_it: 10000
+  out_dir: out/PegInsertion/VAE/035
+  max_it: 20000
   batch_size: 8
   batch_size_val: 8
   print_every: 25
@@ -68,7 +68,7 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0000
-  lr: 0.00003
+  lr: 0.00001
   lr_decay: 0
   weight_decay: 0.0001
   gradient_accumulation: 1
