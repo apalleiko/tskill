@@ -32,7 +32,7 @@ class TSkillCVAE(nn.Module):
                  encoder, decoder, 
                  state_dim, action_dim, 
                  max_skill_len, z_dim,
-                 single_skill, conditional_decode,
+                 conditional_decode,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -43,7 +43,6 @@ class TSkillCVAE(nn.Module):
             action_dim: robot action dimenstion.
             max_skill_len: Max number of actions that can be predicted from a skill
             z_dim: dimension of latent skill vectors
-            single_skill: bool whether to decode only 1 skill at a time
             conditional_decode: bool whether to decode with image/qpos conditional info
             device: device to operate on
         kwargs:
@@ -59,8 +58,6 @@ class TSkillCVAE(nn.Module):
         self._device = device
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.single_skill = single_skill
-        self.look_ahead = 1 # TODO
         self.norm = nn.LayerNorm
         self.conditional_decode = conditional_decode
         self.autoregressive = kwargs.get("autoregressive",False)
@@ -140,6 +137,7 @@ class TSkillCVAE(nn.Module):
         qpos = data["state"].to(self._device)
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
         seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
+        bs = seq_pad_mask.shape[0]
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
         enc_mask = data.get("enc_mask", None)
         dec_mask = data.get("dec_mask", None)
@@ -154,8 +152,8 @@ class TSkillCVAE(nn.Module):
             dec_mask = torch.cat([dec_mask[i:i+1,:,:].repeat(self.decoder.nhead,1,1) 
                                   for i in range(dec_mask.shape[0])])
 
+        # Calculate image features or use precalculated from dataset
         use_precalc = kwargs.get("use_precalc",False)
-        # Calculate image features
         if use_precalc and all(x in data.keys() for x in ("img_feat","img_pe")):
             img_src = data["img_feat"].transpose(0,1).to(self._device)
             img_pe = data["img_pe"].transpose(0,1).to(self._device)
@@ -169,29 +167,25 @@ class TSkillCVAE(nn.Module):
                                             enc_mask, None) # (skill_seq, bs, latent_dim)
         
         # Decode skills, possibly with conditional state & image info from current state
-        if not self.single_skill:
-            a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
-                                        skill_pad_mask, seq_pad_mask, 
-                                        dec_mask, None)
-        else:
-            bs, _ = seq_pad_mask.shape
-            a_hat = torch.zeros(0, bs, self.action_dim, device=self._device) # (0, bs, act_dim)
-            for sk in range(z.shape[0]):
-                # Get current time step and skill
-                t = sk*self.max_skill_len
-                tf = self.max_skill_len*(sk+self.look_ahead)
-                sk_z = z[sk:sk + self.look_ahead, :, :] # (skill_seq <= decode_num, bs, latent_dim)
-                sk_skill_pad_mask = skill_pad_mask[:, sk:sk+self.look_ahead]
-                sk_seq_pad_mask = seq_pad_mask[:, t:tf]
-                # Decode current skill with conditional info
-                a_pred = self.skill_decode(sk_z, qpos[:,t,:], (img_src[t,...], img_pe[t,...]),
-                                           sk_skill_pad_mask, sk_seq_pad_mask, 
-                                           dec_mask, None) # (seq, bs, act_dim)
-                a_hat = torch.vstack((a_hat, a_pred))
-                if torch.any(torch.isnan(a_hat)):
-                    with open("ERROR_DATA.pickle",'+wb') as f:
-                        pickle.dump(data, f)
-                    raise ValueError(f"NaNs encountered during decoding! {a_hat.shape}")
+        a_hat = torch.zeros(0, bs, self.action_dim, device=self._device) # (0, bs, act_dim)
+        for sk in range(z.shape[0]):
+            # Get current time step and skill
+            t = sk*self.max_skill_len
+            tf = self.max_skill_len*(sk+1)
+            sk_z = z[sk:sk + 1, :, :] # (skill_seq <= decode_num, bs, latent_dim)
+            sk_skill_pad_mask = skill_pad_mask[:, sk:sk+1]
+            sk_seq_pad_mask = seq_pad_mask[:, t:tf]
+            # Decode current skill with conditional info
+            a_pred = self.skill_decode(sk_z, qpos[:,t,:], (img_src[t,...], img_pe[t,...]),
+                                        sk_skill_pad_mask, sk_seq_pad_mask, 
+                                        dec_mask, None) # (seq, bs, act_dim)
+            a_hat = torch.vstack((a_hat, a_pred))
+
+        # Check for NaNs   
+        if torch.any(torch.isnan(a_hat)):
+            with open("ERROR_DATA.pickle",'+wb') as f:
+                pickle.dump(data, f)
+            raise ValueError(f"NaNs encountered during decoding! Data saved to ERROR_DATA.pickle")
 
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         if mu is not None:
@@ -213,7 +207,7 @@ class TSkillCVAE(nn.Module):
         # Get a batch mask for eliminating fully padded inputs during training
         batch_mask = torch.all(src_pad_mask, dim=1) 
         if torch.any(batch_mask) > 0:
-            print("Encountered fully padded input!")
+            print("Encountered fully padded encoder input!")
 
         ### Obtain latent z from state, action, image sequence
         if is_training:
@@ -293,16 +287,11 @@ class TSkillCVAE(nn.Module):
 
 
     def skill_decode(self, z_sample, qpos, img_info, 
-                     src_pad_mask=None, tgt_pad_mask=None, 
+                     src_pad_mask, tgt_pad_mask,
                      src_mask=None, tgt_mask=None):
-        """Decode a sequence of skills into actions based on current image state and robot position
+        """Decode an individual skill or sequence of skills into actions, 
+        possibly based on current image state and robot position (self.conditional_decode)
         Currently is not autoregressive and has fixed skill mapping size"""
-        img_src, img_pe = img_info # (bs, num_cam, h*w, c/hidden)
-        img_src = self.image_proj(img_src) # (bs, num_cam, h*w, hidden)
-        img_src = self.image_feat_norm(img_src)
-        img_pe = img_pe * self.img_pe_scale_factor
-        img_src = img_src.flatten(1,2) # (bs, num_cam*h*w, hidden)
-        img_pe = img_pe.flatten(1,2)
         
         skill_seq, bs, _ = z_sample.shape
         if not self.single_skill:
@@ -317,7 +306,7 @@ class TSkillCVAE(nn.Module):
 
         # Get a batch mask for eliminating fully padded inputs during training
         batch_mask = torch.all(src_pad_mask, dim=1)
-        if torch.all(batch_mask):
+        if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which happens often during training.
             return torch.zeros(seq, bs, self.action_dim, device=self._device)
 
         # obtain learned postition embedding for z, state, & img inputs
@@ -339,6 +328,12 @@ class TSkillCVAE(nn.Module):
             state_pe = torch.zeros_like(state_src) # no pe
 
             # image, only use one image to decode rest of the skills
+            img_src, img_pe = img_info # (bs, num_cam, h*w, c/hidden)
+            img_src = self.image_proj(img_src) # (bs, num_cam, h*w, hidden)
+            img_src = self.image_feat_norm(img_src)
+            img_pe = img_pe * self.img_pe_scale_factor
+            img_src = img_src.flatten(1,2) # (bs, num_cam*h*w, hidden)
+            img_pe = img_pe.flatten(1,2)
             img_src = img_src.permute(1, 0, 2) # (h*num_cam*w, bs, hidden)
             img_pe = img_pe.permute(1, 0, 2) # sinusoidal skill pe
             img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding

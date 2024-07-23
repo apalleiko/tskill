@@ -9,16 +9,6 @@ from policy.training import BaseTrainer
 from .skill_plan import TSkillPlan
 
 
-def normal_kl(a, b=None):
-    """Computes KL divergence based on base normal dist."""
-    if b is None:
-        mean = torch.zeros_like(a.mean)
-        std = torch.ones_like(a.mean)
-        b = torch.distributions.Normal(mean, std)
-
-    return torch.distributions.kl.kl_divergence(a, b)
-
-
 class Trainer(BaseTrainer):
     def __init__(
         self,
@@ -120,17 +110,10 @@ class Trainer(BaseTrainer):
         loss_dict["act_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Compute some metrics
-        # metric_dict["batch_mean_seq_len"] = num_actions / bs / act_dim
-        # mean_targ_acts = torch.sum(a_targ, (0,1))/torch.sum(action_loss_mask, (0,1))
-        # mean_pred_acts = torch.sum(a_hat, (0,1))/torch.sum(action_loss_mask, (0,1))
-        # for i in range(act_dim):
-            # metric_dict[f"batch_mean_targ_acts_{i}"] = mean_targ_acts[i]
-            # metric_dict[f"batch_mean_pred_acts_{i}"] = mean_pred_acts[i]
-
-        for i in [1,5,10,20,50,100,150]:
+        # for i in [1,5,10,20,50,100,150]:
             # metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:], a_targ[:,:i,:], reduction="sum") / torch.sum(action_loss_mask[:,:i,:])
-            metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
-            metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
+            # metric_dict[f"batch_mean_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1])
+            # metric_dict[f"batch_mean_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1])
 
         metric_dict["ahat_vector_traj"] = a_hat
 

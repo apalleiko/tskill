@@ -19,9 +19,9 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 
 class TSkillPlan(nn.Module):
-    """ Transformer Skill Planning Module for planning skill sequences"""
-    def __init__(self, transformer, 
-                 skill_vae, 
+    """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
+    def __init__(self, stt_encoder, 
+                 transformer, vae,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -40,18 +40,15 @@ class TSkillPlan(nn.Module):
         """
         super().__init__()
         ### General args
-        self.decoder = decoder
-        self.encoder = encoder
-        self.hidden_dim = decoder.d_model
-        self.z_dim = z_dim
-        self.max_skill_len = max_skill_len
+        self.transformer = transformer
+        self.hidden_dim = transformer.d_model
+        self.vae = vae
+        self.z_dim = self.vae.z_dim
+        self.max_skill_len = self.vae.max_skill_len
         self._device = device
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.single_skill = single_skill
-        self.look_ahead = 1 # TODO
         self.norm = nn.LayerNorm
-        self.conditional_decode = conditional_decode
         self.autoregressive = kwargs.get("autoregressive",False)
 
         ### Get a sinusoidal position encoding table for a given sequence size
@@ -69,11 +66,8 @@ class TSkillPlan(nn.Module):
 
         ### Backbone
         self.stt_encoder = stt_encoder
-        self.by_cam = self.stt_encoder.by_cam
-        if self.by_cam:
-            num_img_feats = 16 # HARDCODED
-        else:
-            num_img_feats = 32
+        num_img_feats = 16 # Hardcoded
+        self.image_proj = nn.Linear(self.stt_encoder.num_channels, self.hidden_dim)
         self.image_feat_norm = self.norm([num_img_feats, self.hidden_dim])
 
         ### Encoder
@@ -81,7 +75,7 @@ class TSkillPlan(nn.Module):
         self.enc_action_norm = self.norm(self.hidden_dim)
         self.enc_state_proj = nn.Linear(state_dim, self.hidden_dim)  # project qpos -> hidden
         self.enc_state_norm = self.norm(self.hidden_dim)
-        self.enc_image_proj = nn.Linear(num_img_feats,1) #TODO Hardcoded
+        self.enc_image_proj = nn.Linear(num_img_feats, 1)
         self.enc_src_norm = self.norm(self.hidden_dim)
         self.enc_tgt_norm = self.norm(self.hidden_dim)
 
@@ -98,7 +92,7 @@ class TSkillPlan(nn.Module):
 
         # Action heads
         nl = self.hidden_dim
-        action_head = []  # TODO make this an mlp?
+        action_head = []
         for n in (128, 64, 32):
             action_head.append(nn.Linear(nl, n)) 
             action_head.append(self.norm(n))
@@ -119,7 +113,9 @@ class TSkillPlan(nn.Module):
         """
         data:
             qpos: bs, seq, qpos_dim
-            images: bs, seq, num_cam, channel, height, width
+            images: bs, seq, num_cam, 3, h, w
+            /img_feat: bs, seq, num_cam, c, h, w
+            /img_pe: bs, seq, num_cam, hidden, h, w
             actions: bs, seq, action_dim
             seq_pad_mask: Padding mask for input sequence (bs, seq)
             skill_pad_mask: Padding mask for skill sequence (bs, max_num_skills)
@@ -128,7 +124,6 @@ class TSkillPlan(nn.Module):
             dec_mask: bs, 2+16*num_cam, "
         """
         qpos = data["state"].to(self._device)
-        images = data["rgb"].to(self._device)
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
         seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
@@ -145,14 +140,21 @@ class TSkillPlan(nn.Module):
             dec_mask = torch.cat([dec_mask[i:i+1,:,:].repeat(self.decoder.nhead,1,1) 
                                   for i in range(dec_mask.shape[0])])
 
+        use_precalc = kwargs.get("use_precalc",False)
         # Calculate image features
-        img_src, img_pe = self.stt_encoder(images) # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c) 
+        if use_precalc and all(x in data.keys() for x in ("img_feat","img_pe")):
+            img_src = data["img_feat"].transpose(0,1).to(self._device)
+            img_pe = data["img_pe"].transpose(0,1).to(self._device)
+        else:
+            images = data["rgb"].to(self._device)
+            img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
 
+        # Encode inputs to latent
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
                                             seq_pad_mask, skill_pad_mask, 
                                             enc_mask, None) # (skill_seq, bs, latent_dim)
         
-        # Decode skills conditioned with conditional state & image info from current state
+        # Decode skills, possibly with conditional state & image info from current state
         if not self.single_skill:
             a_hat = self.skill_decode(z, qpos[:,0,:], (img_src[0,...], img_pe[0,...]),
                                         skill_pad_mask, seq_pad_mask, 
@@ -190,13 +192,9 @@ class TSkillPlan(nn.Module):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         is_training = actions is not None # train or val
         bs, seq, _ = qpos.shape # Use bs for masking
-        img_feat, img_pe = img_info # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c)
-        img_feat = self.image_feat_norm(img_feat)
+        img_feat, img_pe = img_info # (seq, bs, num_cam, h*w, hidden)
         max_num_skills = tgt_pad_mask.shape[1]
-        if self.by_cam:
-            num_cam = img_feat.shape[2]
-        else:
-            num_cam = 1
+        num_cam = img_feat.shape[2]
 
         # Get a batch mask for eliminating fully padded inputs during training
         batch_mask = torch.all(src_pad_mask, dim=1) 
@@ -219,21 +217,22 @@ class TSkillPlan(nn.Module):
             qpos_src = qpos_src + enc_type_embed[1, :, :] # add type 2 embedding
 
             # project img with local pe to correct size
+            img_src = self.image_proj(img_feat) # (seq, bs, num_cam, h*w, hidden)
+            img_src = self.image_feat_norm(img_src)
             img_pe = img_pe * self.img_pe_scale_factor
-            img_src = (img_feat + img_pe) # (seq, bs, h*num_cam*w, c) | (seq, bs, num_cam, h*w, c)
-            img_src = torch.transpose(img_src, -1, -2) # (seq, bs, c, h*num_cam*w) | (seq, bs, num_cam, c, h*w)
-            img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, c=hidden) | (seq, bs, num_cam, c=hidden)
-            if self.by_cam:
-                img_src = img_src.permute(0, 2, 1, 3) # (seq, num_cam, bs, hidden)
-                img_src = torch.vstack([img_src[:,m,...] for m in range(num_cam)]) # (seq*num_cam, bs, hidden)
+            img_src = (img_src + img_pe) # (seq, bs, num_cam, h*w, hidden)
+            img_src = torch.transpose(img_src, -1, -2) # (seq, bs, num_cam, hidden, h*w)
+            img_src = self.enc_image_proj(img_src).squeeze(-1) # (seq, bs, num_cam, hidden)
+            img_src = img_src.permute(0, 2, 1, 3) # (seq, num_cam, bs, hidden)
+            img_src = torch.vstack([img_src[:,m,...] for m in range(num_cam)]) # (seq*num_cam, bs, hidden)
             img_src = img_src + enc_type_embed[2, :, :] # add type 3 embedding
 
             # encoder src
-            enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # (3*seq, bs, hidden_dim) | ((2+num_cam)*seq, bs, hidden_dim)
+            enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # ((2+num_cam)*seq, bs, hidden_dim)
             # obtain seq position embedding for input
             enc_src_pe = self.get_pos_table(seq) * self.enc_src_pos_scale_factor
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
-            enc_src_pe = enc_src_pe.repeat((2+num_cam), bs, 1)  # ((2+num_cam)*seq, bs, hidden_dim) | ((2+num_cam)*seq, bs, hidden_dim)
+            enc_src_pe = enc_src_pe.repeat((2+num_cam), bs, 1)  # ((2+num_cam)*seq, bs, hidden_dim)
             # Add and norm
             enc_src = enc_src + enc_src_pe
             enc_src = self.enc_src_norm(enc_src)
@@ -284,14 +283,14 @@ class TSkillPlan(nn.Module):
                      src_mask=None, tgt_mask=None):
         """Decode a sequence of skills into actions based on current image state and robot position
         Currently is not autoregressive and has fixed skill mapping size"""
-        img_src, img_pe = img_info # (bs, h*num_cam*w, hidden) | (bs, num_cam, h*w, hidden)
+        img_src, img_pe = img_info # (bs, num_cam, h*w, c/hidden)
+        img_src = self.image_proj(img_src) # (bs, num_cam, h*w, hidden)
         img_src = self.image_feat_norm(img_src)
-        if len(img_src.shape) == 4:
-            img_src = img_src.flatten(1,2)
-            img_pe = img_pe.flatten(1,2)
+        img_pe = img_pe * self.img_pe_scale_factor
+        img_src = img_src.flatten(1,2) # (bs, num_cam*h*w, hidden)
+        img_pe = img_pe.flatten(1,2)
         
-        z = self.dec_z(z_sample) # (skill_seq, bs, hidden_dim)
-        skill_seq, bs, _ = z.shape
+        skill_seq, bs, _ = z_sample.shape
         if not self.single_skill:
             seq = tgt_mask_seq = tgt_pad_mask.shape[1]
         else:
@@ -311,24 +310,25 @@ class TSkillPlan(nn.Module):
         dec_type_embed = self.input_embed.weight * self.input_embed_scale_factor
         dec_type_embed = dec_type_embed.unsqueeze(1).repeat(1, bs, 1) # (4, bs, hidden_dim)
 
-        # proprioception features
-        state_src = self.dec_input_state_proj(qpos) # (bs, hidden)
-        state_src = self.dec_input_state_norm(state_src).unsqueeze(0) # (1, bs, hidden)
-        state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
-        state_pe = torch.zeros_like(state_src) # no pe
-
-        # image, only use one image to decode rest of the skills
-        img_src = img_src.permute(1, 0, 2) # (h*num_cam*w, bs, hidden)
-        img_pe = img_pe.permute(1, 0, 2) * self.img_pe_scale_factor # sinusoidal skill pe
-        img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
-
         # skills
-        z_src = self.dec_input_z_norm(z) # (skill_seq, bs, hidden_dim)
+        z_src = self.dec_z(z_sample) # (skill_seq, bs, hidden_dim)
+        z_src = self.dec_input_z_norm(z_src) # (skill_seq, bs, hidden_dim)
+        z_src = z_src + dec_type_embed[3, :, :].repeat(skill_seq, 1, 1) # add type 4 embedding
         z_pe = self.get_pos_table(skill_seq).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_z_pos_scale_factor
-        z_src = z_src + dec_type_embed[3, :, :].repeat(skill_seq, 1, 1) # add type 4 embedding (skill_seq, bs, hidden_dim)
 
         # Concatenate full decoder src
         if self.conditional_decode:
+            # proprioception features
+            state_src = self.dec_input_state_proj(qpos) # (bs, hidden)
+            state_src = self.dec_input_state_norm(state_src).unsqueeze(0) # (1, bs, hidden)
+            state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
+            state_pe = torch.zeros_like(state_src) # no pe
+
+            # image, only use one image to decode rest of the skills
+            img_src = img_src.permute(1, 0, 2) # (h*num_cam*w, bs, hidden)
+            img_pe = img_pe.permute(1, 0, 2) # sinusoidal skill pe
+            img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
+
             dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z, bs, hidden)
             dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0) 
         else:

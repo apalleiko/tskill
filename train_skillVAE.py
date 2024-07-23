@@ -16,7 +16,7 @@ from torch.utils.tensorboard import SummaryWriter
 from policy import config
 from policy.checkpoints import CheckpointIO
 from policy.dataset.ms2dataset import get_MS_loaders
-from policy.skill.training import Trainer
+from policy.training import BaseTrainer as Trainer
 
 matplotlib.use("Agg")
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -62,24 +62,29 @@ def get_args():
         "--skip_train_stt_encoder",
         action="store_true",
     )
-
     parser.add_argument(
         "--log_inputs",
         action="store_true",
     )
-
+    parser.add_argument(
+        "--method",
+        type=str
+    )
     args = parser.parse_args()
     return args
 
 
 def main(args):
-    
-    default_cfg_path = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
+    if args.method == "skill":
+        default_cfg_path = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
+    elif args.method == "plan":
+        default_cfg_path = "/home/mrl/Documents/Projects/tskill/assets/plan/default.yaml"
+
     if len(args.config) > 0:
         user_cfg_path = args.config
         assert os.path.exists(user_cfg_path)
     else:
-        user_cfg_path = default_cfg_path # TODO
+        user_cfg_path = default_cfg_path
 
     assert all(os.path.exists(elem) for elem in (default_cfg_path, user_cfg_path))
 

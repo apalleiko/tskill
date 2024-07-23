@@ -1,8 +1,12 @@
+import os
 from .skill_plan import TSkillPlan
 from .training import Trainer
 import torch
 from torch import nn
 from policy.perception.resnet.config import get_model as get_stt_encoder
+from policy.skill.config import get_model as get_vae
+from policy import config
+from policy.checkpoints import CheckpointIO
 
 
 def freeze_network(network):
@@ -26,44 +30,38 @@ def build_transformer(args):
 def get_model(cfg, device=None):
     # From image
     cfg_model = cfg["model"]
-    for name in ["state_encoder", "encoder", "decoder"]:
+    for name in ["state_encoder"]:
         cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
 
     train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
-    cfg_model["state_encoder"]["train"] = True
 
-    stt_encoder = get_stt_encoder(cfg_model["state_encoder"])
-    encoder = build_transformer(cfg_model["encoder"])
-    decoder = build_transformer(cfg_model["decoder"])
+    transformer = build_transformer(cfg_model["encoder"])
+
+    vae_cfg = config.load_config(os.path.join(cfg_model["vae_path"],"config.yaml"))
+    vae = get_vae(vae_cfg)
+    checkpoint_io = CheckpointIO(cfg_model["vae_path"], model=vae)
+    load_dict = checkpoint_io.load("model_best.pt")
 
     if device is None:
         is_cuda = torch.cuda.is_available()
         device = torch.device("cuda" if is_cuda else "cpu")
 
-    if not train_stt_encoder:
-        print("freezing state encoder network!")
-        freeze_network(stt_encoder)
+    stt_encoder = vae.stt_encoder
 
-    single_skill = cfg_model.get("single_skill",False)
-    cond_dec = cfg_model.get("conditional_decode",True)
+    if not train_stt_encoder:
+        print("Freezing state encoder network!")
+        freeze_network(stt_encoder)
+    
+    if not cfg["training"].get("train_vae",False):
+        print("Freezing CVAE network!")
+        freeze_network(vae)
 
     model = TSkillPlan(
         stt_encoder,
-        encoder,
-        decoder,
-        state_dim=cfg_model["state_dim"],
-        action_dim=cfg_model["action_dim"],
-        max_skill_len=cfg_model["max_skill_len"],
-        z_dim=cfg_model["z_dim"],
-        single_skill=single_skill,
-        conditional_decode=cond_dec,
+        transformer,
+        vae,
         device=device
     )
-
-    # n_trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # print("Number of trainable parameters: %.2fM" % (n_trainable_parameters/1e6,))
-    # n_parameters = sum(p.numel() for p in model.parameters())
-    # print("Number of total parameters: %.2fM" % (n_parameters/1e6,))
 
     return model
 

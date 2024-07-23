@@ -304,6 +304,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         recompute_scaling = True # Whether recomputing action/state scaling is needed
         recompute_fullseq = False # Whether recomputing full sequence data map is needed
         save_override = kwargs.get("save_override", False)
+        fullseq_override = kwargs.get("fullseq_override", False)
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
@@ -332,8 +333,13 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 recompute_scaling = False
         elif all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
             print(f"Loading indices from file: {path}")
-            train_mapping = data_info["train_indices"]
-            val_mapping = data_info["val_indices"]
+            if fullseq_override:
+                print("Overriding full seq config!")
+                train_mapping = data_info["train_ep_indices"]
+                val_mapping = data_info["val_ep_indices"]
+            else:
+                train_mapping = data_info["train_indices"]
+                val_mapping = data_info["val_indices"]
             if all([i in data_info.keys() for i in ("action_scaling", "state_scaling")]):
                 print("Loading action and state scaling from file")
                 act_scaling = data_info["action_scaling"]
@@ -443,13 +449,8 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         # Obtain augmentations
         if augment:
             train_augmentation = DataAugmentation(cfg)
-            if cfg["data"]["augmentation"].get("val_augmentation",False):
-                val_augmentation = train_augmentation
-            else:
-                val_augmentation = None
         else:
             train_augmentation = None
-            val_augmentation = None
 
         # Get extra configs
         pad = cfg_data.get("pad", True)
@@ -467,7 +468,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                                                full_seq, add_batch_dim=add_batch_dim)
         val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_mapping, 
                                              max_seq_len, max_skill_len,
-                                             pad, val_augmentation,
+                                             pad, None,
                                              act_scaling, stt_scaling,
                                              full_seq, add_batch_dim=add_batch_dim)
 
