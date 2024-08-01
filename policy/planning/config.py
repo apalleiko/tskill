@@ -3,7 +3,6 @@ from .skill_plan import TSkillPlan
 from .training import Trainer
 import torch
 from torch import nn
-from policy.perception.resnet.config import get_model as get_stt_encoder
 from policy.skill.config import get_model as get_vae
 from policy import config
 from policy.checkpoints import CheckpointIO
@@ -28,23 +27,28 @@ def build_transformer(args):
 
 
 def get_model(cfg, device=None):
-    # From image
     cfg_model = cfg["model"]
-    for name in ["state_encoder"]:
-        cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
-
-    train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
-
-    transformer = build_transformer(cfg_model["encoder"])
-
-    vae_cfg = config.load_config(os.path.join(cfg_model["vae_path"],"config.yaml"))
-    vae = get_vae(vae_cfg)
-    checkpoint_io = CheckpointIO(cfg_model["vae_path"], model=vae)
-    load_dict = checkpoint_io.load("model_best.pt")
+    # for name in ["state_encoder"]:
+    #     # TODO As is, since reusing the vae state encoder the hidden dim has to match the vaes
+    #     cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
 
     if device is None:
         is_cuda = torch.cuda.is_available()
         device = torch.device("cuda" if is_cuda else "cpu")
+
+    train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
+
+    transformer = build_transformer(cfg_model)
+
+    if cfg.get("vae_cfg",None) is None:
+        vae_cfg = config.load_config(os.path.join(cfg_model["vae_path"],"config.yaml"))
+        cfg["vae_cfg"] = vae_cfg
+    else:
+        vae_cfg = cfg["vae_cfg"]
+    vae = get_vae(vae_cfg, device=device)
+    checkpoint_io = CheckpointIO(cfg_model["vae_path"], model=vae)
+    load_dict = checkpoint_io.load("model_best.pt")
+    vae.conditional_decode = cfg_model["conditional_decode"]
 
     stt_encoder = vae.stt_encoder
 
@@ -57,7 +61,6 @@ def get_model(cfg, device=None):
         freeze_network(vae)
 
     model = TSkillPlan(
-        stt_encoder,
         transformer,
         vae,
         device=device

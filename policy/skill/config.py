@@ -24,7 +24,6 @@ def build_transformer(args):
 
 
 def get_model(cfg, device=None):
-    # From image
     cfg_model = cfg["model"]
     for name in ["state_encoder", "encoder", "decoder"]:
         cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
@@ -42,8 +41,10 @@ def get_model(cfg, device=None):
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
 
-    single_skill = cfg_model.get("single_skill",False)
     cond_dec = cfg_model.get("conditional_decode",True)
+    ar_dec = cfg_model.get("autoregressive_decode",False)
+    encode_state = cfg_model.get("encode_state",True)
+    encoder_is_causal = cfg_model.get("encoder_is_causal",False)
 
     model = TSkillCVAE(
         stt_encoder,
@@ -53,15 +54,12 @@ def get_model(cfg, device=None):
         action_dim=cfg_model["action_dim"],
         max_skill_len=cfg_model["max_skill_len"],
         z_dim=cfg_model["z_dim"],
-        single_skill=single_skill,
         conditional_decode=cond_dec,
-        device=device
+        autoregressive_decode=ar_dec,
+        device=device,
+        encode_state=encode_state,
+        encoder_is_causal=encoder_is_causal
     )
-
-    # n_trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # print("Number of trainable parameters: %.2fM" % (n_trainable_parameters/1e6,))
-    # n_parameters = sum(p.numel() for p in model.parameters())
-    # print("Number of total parameters: %.2fM" % (n_parameters/1e6,))
 
     return model
 

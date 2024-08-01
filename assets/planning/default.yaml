@@ -1,44 +1,51 @@
 method: plan
-notes:
+notes: New planning run with pretrained VAE
 data:
-  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos2.h5
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
-  augment: True
+  augment: False
   augmentation:
-    image_aug: 0.75
+    subsequence_rate: 0
+    image_aug: 0
   max_count: 50
   indices:
   full_seq: True
 
 model:
-  vae_path: 
-
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/041
   hidden_dim: 256
-  dropout : 0.4
+  dropout : 0.1
   nheads : 4
   dim_feedforward : 256 
   enc_layers : 3
-  dec_layers : 2
-  pre_norm : False 
+  dec_layers : 5
+  pre_norm : False
+  conditional_decode: True
+
+loss:
+  z_weight: 1
+  act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/001
-  max_it: 10000
-  batch_size: 8
-  batch_size_val: 8
+  out_dir: out/PegInsertion/Plan/006
+  train_vae: False
+  max_it: 20000
+  batch_size: 6
+  batch_size_val: 6
   print_every: 25
-  visualize_every: 200
-  checkpoint_every: 200
-  validate_every: 200
+  visualize_every: 250
+  checkpoint_every: 500
+  validate_every: 250
   backup_every: 500
-  model_selection_metric: act_loss
+  model_selection_metric: act_plan_loss
   model_selection_mode: minimize
   n_workers: 0
   n_workers_val: 0
-  lr_state_encoder: 0.0000
+  lr_state_encoder: 0
   lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001
   gradient_accumulation: 2
+  use_precalc: True

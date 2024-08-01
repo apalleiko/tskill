@@ -120,12 +120,13 @@ class ManiSkillDataset(Dataset):
 class ManiSkillrgbSeqDataset(ManiSkillDataset):
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
-    def __init__(self, dataset_file: str, indices: list,
+    def __init__(self, method: str, dataset_file: str, indices: list,
                  max_seq_len: int = 200, max_skill_len: int = 10, 
                  pad: bool=True, augmentation=None,
                  action_scaling=None, state_scaling=None,
-                 full_seq: bool = True,
+                 full_seq: bool = True, autoregressive_decode = False,
                  **kwargs) -> None:
+        self.method = method
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -141,6 +142,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.pad = pad
         self.augmentation = augmentation
         self.full_seq = full_seq
+        self.generate_dec_ar_masks = autoregressive_decode
         self.add_batch_dim = kwargs.get("add_batch_dim",False)
 
         if action_scaling is None:
@@ -165,6 +167,8 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             eps = self.episodes[mp[0]]
             i0 = mp[1]
 
+        data = dict()
+
         trajectory = self.data[f"traj_{eps['episode_id']}"]
         trajectory = load_h5_data(trajectory)
 
@@ -176,16 +180,25 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim) 
-        
+
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
             img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            num_cam = img_feat.shape[1]
         else:
             use_precalc = False
             rgbd = obs["rgbd"][:-1]
             rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
+            num_cam = rgb.shape[1]
+
+        if self.method == "plan":
+            if use_precalc:
+                data["goal_feat"] = img_feat[-1:,...]
+                data["goal_pe"] = img_pe[-1:,...]
+            else:
+                data["goal"] = rgb[-1:,...]
 
         # Add padding to sequences to match lengths and generate padding masks
         if self.pad:
@@ -214,9 +227,9 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         # Infer skill padding mask from input sequence mask
         skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, self.max_skill_len)
 
-        data = dict(state=state, 
+        data.update(dict(state=state, 
                     seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask,
-                    actions=actions)
+                    actions=actions))
         
         # Add precalculated features to data if applicable
         if use_precalc:
@@ -229,7 +242,20 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         if self.augmentation is not None:
             data = self.augmentation(data)
 
-        if self.add_batch_dim: # Add extra dimension for batch size as model expects this.
+        # Generate autoregressive masks for vae decoder if applicable
+        if self.generate_dec_ar_masks:
+            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(16*num_cam, self.max_skill_len)
+            data["dec_src_mask"] = dec_src_mask
+            data["dec_mem_mask"] = dec_mem_mask
+            data["dec_tgt_mask"] = dec_tgt_mask
+
+        # Create autoregressive masks for skill planner
+        if self.method == "plan":
+            plan_tgt_mask = get_plan_ar_masks(self.max_num_skills)
+            data["plan_tgt_mask"] = plan_tgt_mask
+
+        # Add extra dimension for batch size as model expects this.
+        if self.add_batch_dim:
             for k,v in data.items():
                 data[k] = v.unsqueeze(0)
 
@@ -242,7 +268,6 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
         - seq_pad: tensor (seq)
         - max_skill_len: int
     """
-
     max_num_skills = torch.ceil(torch.tensor(seq_pad.shape[0]/max_skill_len)).to(torch.int)
     num_unpad_seq = torch.sum(torch.logical_not(seq_pad).to(torch.int16))
     num_unpad_skills = torch.ceil(num_unpad_seq / max_skill_len) # get skills with relevant outputs TODO handle non divisible skill lengths
@@ -252,55 +277,72 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
     return skill_pad_mask
     
 
-def get_next_seq_timestep(cfg, data):
-    """Function to step to the next timestep for sequence data input of size (bs, seq, ...)
-    Also eliminates batched seq that no longer have any non-padded inputs to avoid nans"""
+def get_dec_ar_masks(num_img_feats, max_skill_len):
+    """ 
+    The masks for this information will be diagonal such that at each timestep, 
+    the model can only attend to the conditional info at that timestep. This is
+    for the specific order that is used in the SkillVAE model
+    """
+    dec_src_len = max_skill_len * (2 + num_img_feats) # (MSL*(q + img_feats + z))
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
+    dec_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
     
-    max_skill_len = cfg["model"]["max_skill_len"]
-    new_data = dict()
+    sa_mask = ~torch.diag(torch.ones(max_skill_len)).to(torch.bool) # Self attention mask
+    dec_mask[:max_skill_len,:max_skill_len] =  sa_mask # Unmask qpos self attention
+    dec_mask[-max_skill_len:,-max_skill_len:] = sa_mask # Unmask z self attention
+    for s in range(max_skill_len):
+        im_start = max_skill_len + s*num_img_feats
+        im_end = im_start + num_img_feats
+        zs = -max_skill_len + s
+        # Decoder mask
+        dec_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
+        dec_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
+        dec_mask[zs,im_start:im_end] = False # Unmask z attention to img features
+        dec_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+        dec_mask[im_start:im_end,zs] = False # Unmask img features attention to z
+        dec_mask[s,zs] = False # Unmask qpos attention to z
+        dec_mask[zs,s] = False # Unmask z attention to qpos
+        # Memory mask, leave column 0 all True to mask attention to start token 
+        mem_mask[s,im_start:im_end] = False # Unmask action attention to img features
+        mem_mask[s,zs] = False # Unmask action attention to z
+        mem_mask[s,s] = False # Unmask action attention to qpos
 
-    for k,v in data.items():
-        if "skill" not in k:
-            data[k] = v[:,1:,...]
-        new_data[k] = []
-    
-    seq_pad_mask = data["seq_pad_mask"]
-    bs, seq = seq_pad_mask.shape
-    if seq==0:
-        return None
-    for b in range(bs):
-        spmb = seq_pad_mask[b,:]
-        if not torch.all(spmb):
-            for k,v in data.items():
-                if "skill" not in k:
-                    new_data[k].append(v[b,...])
-                else:
-                    skpmb = get_skill_pad_from_seq_pad(spmb, max_skill_len)
-                    new_data[k].append(skpmb)
-    
-    for k,v in new_data.items():
-        if len(v) == 0:
-            return None
-        new_data[k] = torch.stack(v, dim=0)
-    
-    return new_data
+    return dec_mask, mem_mask, tgt_mask
+
+
+def get_plan_ar_masks(max_num_skills):
+    """
+    The masks for this information will be causal for the skills
+    """
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+    return tgt_mask
 
 
 def get_MS_loaders(cfg,  **kwargs) -> None:
+        method = cfg["method"]
+        if method == "plan":
+            cfg_model_vae = cfg["vae_cfg"]["model"]
+            cfg_vae = cfg["vae_cfg"]
+        else:
+            cfg_model_vae = cfg["model"]
+            cfg_vae = cfg
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
         augment: bool = cfg_data.get("augment", False) # Augmentation
+        pad: bool = cfg_data.get("pad", True)
         count: int = cfg_data.get("max_count", 0) # Dataset count limitations
-        max_skill_len: int = cfg["model"]["max_skill_len"] # Max skill length
+        max_skill_len: int = cfg_model_vae["max_skill_len"] # Max skill length
+        autoregressive_decode: bool = cfg_model_vae["autoregressive_decode"] # Whether decoding autoregressively
         full_seq: bool = cfg_data.get("full_seq") # Whether to use a mapping for the episodes to start at each timestep
+        max_seq_len = cfg_data.get("max_seq_len", 0)
 
         # Scale actions/states, or compute normalization for the dataset
-        action_scaling = cfg_data.get("action_scaling",1)
-        state_scaling = cfg_data.get("state_scaling",1)
-        gripper_scaling = cfg_data.get("gripper_scaling", True)
-        max_seq_len = cfg_data.get("max_seq_len", 0)
+        action_scaling = cfg_vae["data"].get("action_scaling",1)
+        state_scaling = cfg_vae["data"].get("state_scaling",1)
+        gripper_scaling = cfg_vae["data"].get("gripper_scaling", True)
         recompute_scaling = True # Whether recomputing action/state scaling is needed
         recompute_fullseq = False # Whether recomputing full sequence data map is needed
         save_override = kwargs.get("save_override", False)
@@ -400,6 +442,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_acts = torch.vstack(train_acts)
             train_states = torch.vstack(train_states)
             
+            # Determine whether to scale gripper actions
             if not gripper_scaling:
                 print("Computing seperate gripper scaling")
                 sep_idx = -1
@@ -448,12 +491,11 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
 
         # Obtain augmentations
         if augment:
-            train_augmentation = DataAugmentation(cfg)
+            train_augmentation = DataAugmentation(cfg, cfg_model_vae)
         else:
             train_augmentation = None
 
         # Get extra configs
-        pad = cfg_data.get("pad", True)
         return_dataset = kwargs.get("return_datasets", False)
         override_batch_dim = kwargs.get("add_batch_dim",False)
         add_batch_dim = not pad or return_dataset or override_batch_dim
@@ -461,16 +503,18 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             print("Adding batch dimension to returned data!")
 
         # Create datasets
-        train_dataset = ManiSkillrgbSeqDataset(dataset_file, train_mapping, 
+        train_dataset = ManiSkillrgbSeqDataset(method, dataset_file, train_mapping, 
                                                max_seq_len, max_skill_len,
                                                pad, train_augmentation,
                                                act_scaling, stt_scaling,
-                                               full_seq, add_batch_dim=add_batch_dim)
-        val_dataset = ManiSkillrgbSeqDataset(dataset_file, val_mapping, 
+                                               full_seq, autoregressive_decode,
+                                               add_batch_dim=add_batch_dim)
+        val_dataset = ManiSkillrgbSeqDataset(method, dataset_file, val_mapping, 
                                              max_seq_len, max_skill_len,
                                              pad, None,
                                              act_scaling, stt_scaling,
-                                             full_seq, add_batch_dim=add_batch_dim)
+                                             full_seq, autoregressive_decode,
+                                             add_batch_dim=add_batch_dim)
 
         if return_dataset:
             return train_dataset, val_dataset
@@ -540,11 +584,10 @@ class ScalingFunction:
 
 
 class DataAugmentation:
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, cfg_model) -> None:
         self.max_seq_len = cfg["data"]["max_seq_len"]
-        self.max_skill_len = cfg["model"]["max_skill_len"]
-        self.single_skill = cfg["model"].get("single_skill", False)
-        self.cond_dec = cfg["model"].get("conditional_decode", True)
+        self.max_skill_len = cfg_model["max_skill_len"]
+        self.cond_dec = cfg_model.get("conditional_decode", True)
         cfg_aug = cfg["data"]["augmentation"]
         self.subsequence_rate = cfg_aug.get("subsequence_rate", 0)
         self.seq_masking_rate = cfg_aug.get("seq_masking_rate", 0)
@@ -614,7 +657,7 @@ class DataAugmentation:
         return data
     
     def seq_masking(self, data):
-        """Encoder/decoder input sequence masking function"""
+        """Encoder input sequence masking function. Doesn't mask inputs to decoder"""
         if "rgb" in data.keys():
             n_cam = data["rgb"].shape[1]
         elif "img_feat" in data.keys():
@@ -627,21 +670,7 @@ class DataAugmentation:
         enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
         enc_mask = enc_mask.fill_diagonal_(False)
 
-        # # Don't mask image inputs to decoder?
-        # dec_img_len = 16 * data["rgb"].shape[1] # HARDCODED 
-        # dec_mask = torch.rand(dec_img_len) < self.seq_masking_rate
-        # if self.single_skill:
-        #     z_mask = torch.tensor([False])
-        # else:
-        #     z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
-        # stt_mask = torch.tensor([False])
-        # dec_mask = torch.cat((stt_mask, dec_mask, z_mask), 0)
-        # dec_inp_len = dec_mask.shape[0]
-        # dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
-        # dec_mask = dec_mask.fill_diagonal_(False)
-
         data["enc_mask"] = enc_mask
-        # data["dec_mask"] = dec_mask
 
         # Check if mask + padding yield a fully masked input sequence
         # If so, deactivate the input mask
@@ -673,39 +702,11 @@ class DataAugmentation:
         enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
         enc_mask = enc_mask.fill_diagonal_(False)
 
-        # Decoder input mask, only mask image and/or qpos
-        dec_type_mask = torch.rand(2) < self.type_masking_rate
-        dec_img_len = 16 * n_cam # HARDCODED
-        dec_mask = torch.zeros(dec_img_len).to(torch.bool)
-        stt_mask = torch.tensor([False])
-        if dec_type_mask[0]:
-            dec_mask = ~dec_mask
-        if dec_type_mask[1]:
-            stt_mask = ~stt_mask
-
-        if self.single_skill: # Incompatible with look ahead
-            z_mask = torch.tensor([False])
-        else:
-            z_mask = torch.zeros(int(self.max_seq_len / self.max_skill_len)).to(torch.bool)
-        
-        # Same order as in cvae
-        dec_mask = torch.cat((stt_mask, dec_mask, z_mask), 0)
-        dec_inp_len = dec_mask.shape[0]
-        dec_mask = dec_mask.unsqueeze(0).repeat(dec_inp_len, 1)
-        dec_mask = dec_mask.fill_diagonal_(False)
-
         # Merge with existing masks if applicable
         if "enc_mask" in data.keys():
             data["enc_mask"] = data["enc_mask"] | enc_mask
         else:
             data["enc_mask"] = enc_mask
-
-        if not self.cond_dec:
-            pass
-        elif "dec_mask" in data.keys():
-            data["dec_mask"] = data["dec_mask"] | dec_mask
-        else:
-            data["dec_mask"] = dec_mask
 
         # Check if input mask + padding yields a fully masked input sequence
         # If so, deactivate the input mask

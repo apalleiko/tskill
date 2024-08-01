@@ -75,10 +75,13 @@ def get_args():
 
 
 def main(args):
+    default_vae = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
+    default_plan = "/home/mrl/Documents/Projects/tskill/assets/planning/default.yaml"
+
     if args.method == "skill":
-        default_cfg_path = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
+        default_cfg_path = default_vae
     elif args.method == "plan":
-        default_cfg_path = "/home/mrl/Documents/Projects/tskill/assets/plan/default.yaml"
+        default_cfg_path = default_plan
 
     if len(args.config) > 0:
         user_cfg_path = args.config
@@ -89,6 +92,9 @@ def main(args):
     assert all(os.path.exists(elem) for elem in (default_cfg_path, user_cfg_path))
 
     cfg = config.load_config(user_cfg_path, default_cfg_path)
+    if cfg["method"] == "plan":
+        cfg["vae_cfg"] = config.load_config(os.path.join(cfg["model"]["vae_path"],"config.yaml"))
+
     if args.skip_train_stt_encoder:
         cfg["training"]["lr_state_encoder"] = 0
 
@@ -111,9 +117,9 @@ def main(args):
         cfg["training"]["visualize_every"] = 1
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 5
+        cfg["training"]["validate_every"] = 1
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 20
+        cfg["training"]["max_it"] = 2
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -278,7 +284,10 @@ def main(args):
                 print_str += f"eta: {t_eta}, "
 
                 for k, v in losses.items():
-                    print_str += f"{k}:{v:.4f}, "
+                    if v < 0.001:
+                        print_str += f"{k}:{10000*v:.2f}e-4, "
+                    else:
+                        print_str += f"{k}:{v:.4f}, "
                 print(print_str)
 
             # Save checkpoint

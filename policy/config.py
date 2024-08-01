@@ -1,12 +1,14 @@
 import yaml
 
 from policy import skill
+from policy import planning
 from policy.perception import resnet
 
 
 method_dict = {
     "resnet": resnet,
     "skill": skill,
+    "plan": planning
 }
 
 

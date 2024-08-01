@@ -1,5 +1,5 @@
 method: skill
-notes: Test continue training from 32 with lower lr.
+notes: Testing whether scaling pos/emb factor down makes a difference in learning.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -8,14 +8,13 @@ data:
   action_scaling: normal
   state_scaling: 1
   gripper_scaling: False
-  augment: True
+  augment: False
   augmentation:
     subsequence_rate: 0.33
     seq_masking_rate: 0.1
     type_masking_rate: 0
     image_aug: 0
     input_noise: False
-    val_augmentation: False
   max_count: 50
   indices:
   full_seq: True
@@ -23,18 +22,20 @@ data:
 model:
   state_dim : 9
   action_dim : 8
-  z_dim : 128
+  z_dim : 64
   hidden_dim: 256
   max_skill_len: 10
-  single_skill: True
-  conditional_decode: True
+  conditional_decode: False
+  autoregressive_decode: False
+  encode_state: True
+  encoder_is_causal: False
   
   encoder:  
     dropout : 0.1
     nheads : 4
     dim_feedforward : 256
     enc_layers : 3
-    dec_layers : 2
+    dec_layers : 3
     pre_norm : False
   
   decoder:
@@ -42,8 +43,8 @@ model:
     nheads : 4
     dim_feedforward : 256
     enc_layers : 2
-    dec_layers : 3
-    pre_norm : False 
+    dec_layers : 4
+    pre_norm : False
   
   state_encoder:
     method: resnet
@@ -54,22 +55,22 @@ loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/VAE/035
+  out_dir: out/PegInsertion/VAE/044
   max_it: 20000
   batch_size: 8
   batch_size_val: 8
   print_every: 25
-  visualize_every: 200
-  checkpoint_every: 200
-  validate_every: 200
+  visualize_every: 500
+  checkpoint_every: 500
+  validate_every: 250
   backup_every: 500
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0000
-  lr: 0.00001
+  lr: 0.000003
   lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 1
+  gradient_accumulation: 2
   use_precalc: True
