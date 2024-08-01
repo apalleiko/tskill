@@ -1,12 +1,12 @@
 import yaml
 
 from policy import skill
-from policy.perception import resnet
+from policy.perception import conv_onet
 
 
 method_dict = {
-    "resnet": resnet,
     "skill": skill,
+    "conv_onet": conv_onet
 }
 
 

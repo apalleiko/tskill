@@ -1,0 +1,56 @@
+method: conv_onet
+
+data:
+  input_type: pointcloud
+  dataset: data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
+  pointcloud_n: 16348
+  pointcloud_noise: 0.005
+  points_subsample: 2048
+  padding: false
+  max_count: 10
+
+model:
+  encoder: pointnet_local_pool
+  encoder_kwargs:
+    dim: 6
+    hidden_dim: 32
+    plane_type: ['xz', 'xy', 'yz']
+    plane_resolution: 128
+    
+    unet: True
+    unet_kwargs:
+      depth: 5
+      merge_mode: concat
+      start_filts: 32
+    
+  decoder: simple_local
+  decoder_kwargs:
+    dim: 3
+    sample_mode: bilinear # bilinear / nearest
+    hidden_size: 32
+  c_dim: 32
+
+training:
+  out_dir: out/testing/conv_onet
+  batch_size: 64
+  batch_size_val: 16
+  model_selection_metric: occ_loss
+  model_selection_mode: minimize
+  print_every: 100
+  visualize_every: 10000
+  validate_every: 10000
+  checkpoint_every: 2000
+  backup_every: 10000
+  n_workers: 8
+  n_workers_val: 4
+test:
+  threshold: 0.2
+  eval_mesh: true
+  eval_pointcloud: false
+  remove_wall: true
+  model_file: model_best.pt
+generation:
+  vis_n_outputs: 2
+  refine: false
+  n_x: 128
+  n_z: 1
