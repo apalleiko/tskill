@@ -138,7 +138,7 @@ class TSkillPlan(nn.Module):
         else:
             z_tgt = data["z_tgt"] # (tgt_seq, bs, z_dim)
             plan_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(z_tgt.shape[0], device=self._device)
-            plan_skill_pad_mask = torch.zeros(z_tgt.shape[1], z_tgt.shape[0])
+            plan_skill_pad_mask = torch.zeros(z_tgt.shape[1], z_tgt.shape[0], device=self._device)
             z_hat = self.forward_plan((goal_src, goal_pe),
                                     qpos[:,:1,...],
                                     (img_src[:1,...], img_pe[:1,...]),

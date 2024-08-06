@@ -17,6 +17,7 @@ from policy import config
 from policy.checkpoints import CheckpointIO
 from policy.dataset.ms2dataset import get_MS_loaders
 from policy.training import BaseTrainer as Trainer
+from policy.simulation_loss import SimLoss
 
 matplotlib.use("Agg")
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -177,9 +178,6 @@ def main(args):
             "params": [p for n, p in model.named_parameters() if "stt_encoder" in n and p.requires_grad],
             "lr": cfg["training"]["lr_state_encoder"],
         })
-    n_p = 0
-    for d in param_dicts:
-        n_p += sum([p.numel() for p in d["params"]])
 
     optimizer = torch.optim.AdamW(param_dicts, lr=lr,
                                   weight_decay=weight_decay)    
@@ -191,7 +189,9 @@ def main(args):
         scheduler = None
     
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device, scheduler=scheduler)
-    checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
+    # checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
+    checkpoint_io = CheckpointIO(out_dir, model=model)
+    sim_loss = SimLoss(cfg, val_dataset)
 
     if args.bootstrap:
         checkpoint_io.load_model_only(args.ckpt_file)
@@ -217,8 +217,6 @@ def main(args):
     # Print model
     nparameters = sum(p.numel() for p in model.parameters())
     n_trainable_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    assert n_trainable_parameters == n_p, "Number of trainable params does not match param dicts"
-
     print("Number of trainable parameters: %.2fM" % (n_trainable_parameters/1e6,))
     print("Number of total parameters: %.2fM" % (nparameters/1e6,))
     print("output path: ", cfg["training"]["out_dir"])
@@ -309,6 +307,7 @@ def main(args):
 
             # Run validation
             if validate_every > 0 and (it % validate_every) == 0:
+                sim_eval = sim_loss.sim_acts(model)
                 eval_dict, eval_metric_dict = trainer.evaluate(val_loader)
                 metric_val = eval_dict[model_selection_metric]
                 print(
@@ -318,6 +317,9 @@ def main(args):
 
                 metrics = {f"val/{k}": v for k, v in eval_dict.items()}
                 metrics.update({f"val/metrics/{k}": v for k, v in eval_metric_dict.items()})
+
+                metrics.update({"val/sim_act_loss": sim_eval["sim_act_loss"]})
+
                 wandb.log(metrics)
 
                 if model_selection_sign * (metric_val - metric_val_best) > 0:

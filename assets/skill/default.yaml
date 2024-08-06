@@ -1,5 +1,5 @@
 method: skill
-notes: Testing whether scaling pos/emb factor down makes a difference in learning.
+notes: Base for cotrain run.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -13,8 +13,6 @@ data:
     subsequence_rate: 0.33
     seq_masking_rate: 0.1
     type_masking_rate: 0
-    image_aug: 0
-    input_noise: False
   max_count: 50
   indices:
   full_seq: True
@@ -22,28 +20,28 @@ data:
 model:
   state_dim : 9
   action_dim : 8
-  z_dim : 64
+  z_dim : 128
   hidden_dim: 256
   max_skill_len: 10
   conditional_decode: False
   autoregressive_decode: False
   encode_state: True
-  encoder_is_causal: False
+  encoder_is_causal: True
   
   encoder:  
     dropout : 0.1
     nheads : 4
-    dim_feedforward : 256
+    dim_feedforward : 512
     enc_layers : 3
-    dec_layers : 3
+    dec_layers : 4
     pre_norm : False
   
   decoder:
     dropout : 0.1
     nheads : 4
-    dim_feedforward : 256
-    enc_layers : 2
-    dec_layers : 4
+    dim_feedforward : 512
+    enc_layers : 3
+    dec_layers : 5
     pre_norm : False
   
   state_encoder:
@@ -55,13 +53,13 @@ loss:
   kl_weights: 0.0001
 
 training:
-  out_dir: out/PegInsertion/VAE/044
-  max_it: 20000
-  batch_size: 8
-  batch_size_val: 8
+  out_dir: out/PegInsertion/VAE/053
+  max_it: 1
+  batch_size: 4
+  batch_size_val: 4
   print_every: 25
   visualize_every: 500
-  checkpoint_every: 500
+  checkpoint_every: 1
   validate_every: 250
   backup_every: 500
   model_selection_metric: act_loss
@@ -72,5 +70,5 @@ training:
   lr: 0.000003
   lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 2
+  gradient_accumulation: 1
   use_precalc: True

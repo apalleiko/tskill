@@ -1,5 +1,5 @@
 method: plan
-notes: New planning run with pretrained VAE
+notes: Planning run with better vae from 053 (higher z dim)
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -14,26 +14,26 @@ data:
   full_seq: True
 
 model:
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/041
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/053
   hidden_dim: 256
   dropout : 0.1
   nheads : 4
-  dim_feedforward : 256 
+  dim_feedforward : 256
   enc_layers : 3
   dec_layers : 5
   pre_norm : False
-  conditional_decode: True
+  conditional_decode: False
 
 loss:
   z_weight: 1
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/006
-  train_vae: False
-  max_it: 20000
-  batch_size: 6
-  batch_size_val: 6
+  out_dir: out/PegInsertion/Plan/008
+  train_vae: True
+  max_it: 30000
+  batch_size: 8
+  batch_size_val: 8
   print_every: 25
   visualize_every: 250
   checkpoint_every: 500
@@ -41,11 +41,11 @@ training:
   backup_every: 500
   model_selection_metric: act_plan_loss
   model_selection_mode: minimize
-  n_workers: 0
-  n_workers_val: 0
+  n_workers: 2
+  n_workers_val: 2
   lr_state_encoder: 0
   lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 2
+  gradient_accumulation: 1
   use_precalc: True

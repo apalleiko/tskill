@@ -395,6 +395,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                         t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
                         latent = z_hat[t_sk:t_sk+1,...]
                     else: # Preplanned
+                        t_plan = t
                         latent = out["latent"] if method != "plan" else out["vae_out"]["latent"]
                         latent = latent[t_sk:t_sk+1,...]
 
@@ -403,22 +404,17 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     
                     # Decode latent into actions
                     if vae.autoregressive_decode:
-                        num_prev_actions = t % MSL
-                        if num_prev_actions > 0: # Take first action from chunk list
-                            prev_actions = torch.flip(torch.stack([torch.from_numpy(chunk[t-i-1][-1]) for i in range(num_prev_actions)],dim=0),dims=[0])
-                            prev_actions = prev_actions.unsqueeze(0)
-                        else:
-                            prev_actions = torch.zeros(1,0,model.action_dim)
-                        tgt_0 = torch.zeros(1,1,model.action_dim)
-                        tgt = torch.cat((tgt_0, prev_actions), dim=1) # (1, npa, act_dim)
+                        if t_plan % MSL == 0: # Decode new sequence
+                            tgt = torch.zeros(1,1,model.action_dim)
                         tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
                         seq_pad_mask = torch.zeros(1,tgt.shape[1])
                         with torch.no_grad():
                             a_pred = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 
                                                         dec_skill_pad_mask, seq_pad_mask,
-                                                        tgt_mask=tgt_mask, tgt=tgt)
-                        a_pred = a_pred.detach().cpu().squeeze(1)
-                        a_hat = dataset.action_scaling(a_pred, "inverse").numpy()
+                                                        tgt_mask=tgt_mask, tgt=tgt) # (MSL|<, bs, action_dim)
+                        tgt = torch.cat((tgt, a_pred.permute(1,0,2)[:,-1:,...]), dim=1) # (1, seq + 1, act_dim)
+                        a_hat = a_pred.detach().cpu()[:,-1,...] # Take most recent action
+                        a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
                     elif args.by_skill and (t % MSL != 0):
                         obs, _, _, _, info = env.step(a_hat[t % MSL,:])
                     else:
@@ -431,8 +427,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 
                     # Track previous actions for chunking/autoregression / Get correct current action
                     if vae.autoregressive_decode:
-                        chunk[t].append(a_pred[-1,:].numpy()) # Have to store scaled actions
-                        a_t = a_hat[-1,:]
+                        a_t = a_hat[0,...]
                     elif args.chunk > 1 and t >= args.chunk:
                         for k in range(a_hat.shape[0]):
                             chunk[t+k].append(a_hat[k,:]*alpha*(1-alpha)**k)

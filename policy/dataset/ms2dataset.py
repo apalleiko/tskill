@@ -125,6 +125,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
                  pad: bool=True, augmentation=None,
                  action_scaling=None, state_scaling=None,
                  full_seq: bool = True, autoregressive_decode = False,
+                 encoder_is_causal = False,
                  **kwargs) -> None:
         self.method = method
         self.dataset_file = dataset_file
@@ -143,6 +144,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.augmentation = augmentation
         self.full_seq = full_seq
         self.generate_dec_ar_masks = autoregressive_decode
+        self.generate_enc_causal_masks = encoder_is_causal
         self.add_batch_dim = kwargs.get("add_batch_dim",False)
 
         if action_scaling is None:
@@ -249,6 +251,17 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             data["dec_mem_mask"] = dec_mem_mask
             data["dec_tgt_mask"] = dec_tgt_mask
 
+        # Create causal masks for vae encoder if applicable
+        if self.generate_enc_causal_masks:
+            enc_causal_mask, enc_mem_mask, enc_tgt_mask = get_enc_causal_masks(self.max_seq_len, self.max_num_skills, self.max_skill_len)
+            # Merge with existing masks if applicable
+            if "enc_src_mask" in data.keys():
+                data["enc_src_mask"] = data["enc_src_mask"] | enc_causal_mask
+            else:
+                data["enc_src_mask"] = enc_causal_mask
+            data["enc_mem_mask"] = enc_mem_mask
+            data["enc_tgt_mask"] = enc_tgt_mask
+
         # Create autoregressive masks for skill planner
         if self.method == "plan":
             plan_tgt_mask = get_plan_ar_masks(self.max_num_skills)
@@ -319,6 +332,19 @@ def get_plan_ar_masks(max_num_skills):
     return tgt_mask
 
 
+def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len):
+    """
+    Gets a causal mask for the encoder. Is only the size of max seq len, so has to be repeated in the encoder itself.
+    """
+    enc_causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_seq_len)
+    enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+    enc_mem_mask = torch.ones(max_num_skills, max_seq_len).to(torch.bool)
+    for s in range(max_num_skills):
+        sk_end = s*max_skill_len + max_skill_len
+        enc_mem_mask[s,:sk_end] = False # Unmask skill attention to prior sequence items
+    return enc_causal_mask, enc_mem_mask, enc_tgt_mask
+
+
 def get_MS_loaders(cfg,  **kwargs) -> None:
         method = cfg["method"]
         if method == "plan":
@@ -336,6 +362,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         count: int = cfg_data.get("max_count", 0) # Dataset count limitations
         max_skill_len: int = cfg_model_vae["max_skill_len"] # Max skill length
         autoregressive_decode: bool = cfg_model_vae["autoregressive_decode"] # Whether decoding autoregressively
+        encoder_is_causal: bool = cfg_model_vae.get("encoder_is_causal",True) # Whether encoder has causal masks applied
         full_seq: bool = cfg_data.get("full_seq") # Whether to use a mapping for the episodes to start at each timestep
         max_seq_len = cfg_data.get("max_seq_len", 0)
 
@@ -507,13 +534,13 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                                                max_seq_len, max_skill_len,
                                                pad, train_augmentation,
                                                act_scaling, stt_scaling,
-                                               full_seq, autoregressive_decode,
+                                               full_seq, autoregressive_decode, encoder_is_causal,
                                                add_batch_dim=add_batch_dim)
         val_dataset = ManiSkillrgbSeqDataset(method, dataset_file, val_mapping, 
                                              max_seq_len, max_skill_len,
                                              pad, None,
                                              act_scaling, stt_scaling,
-                                             full_seq, autoregressive_decode,
+                                             full_seq, autoregressive_decode, encoder_is_causal,
                                              add_batch_dim=add_batch_dim)
 
         if return_dataset:
@@ -585,6 +612,7 @@ class ScalingFunction:
 
 class DataAugmentation:
     def __init__(self, cfg, cfg_model) -> None:
+        self.method = cfg["method"]
         self.max_seq_len = cfg["data"]["max_seq_len"]
         self.max_skill_len = cfg_model["max_skill_len"]
         self.cond_dec = cfg_model.get("conditional_decode", True)
@@ -599,9 +627,6 @@ class DataAugmentation:
         
         if self.subsequence_rate > 0:
             data = self.subsequence(data)
-
-        if self.img_aug > 0:
-            data = self.image_aug(data)
 
         if self.seq_masking_rate > 0:
             data = self.seq_masking(data)
@@ -622,17 +647,24 @@ class DataAugmentation:
             num_seq = torch.randint(1, num_unpad_seq+1, (1,1)).squeeze()
 
             # Pick a random index to start at in the possible window
-            # TODO Start at least max_skill_len away from the end of each demo in the batch?
             window = num_unpad_seq - num_seq
             seq_idx_start = torch.randint(0, window+1, (1,1)).squeeze()
             seq_idx_end = seq_idx_start + num_seq
             
             # Reset "new" sequences to the beginning (for positional encodings)
             for k,v in data.items():
-                if k not in ("skill_pad_mask", "seq_pad_mask"):
+                if "mask" not in k and "goal" not in k:
                     new_seq = torch.zeros_like(v)
                     new_seq[:num_seq,...] = v[seq_idx_start:seq_idx_end,...]
                     data[k] = new_seq
+
+            # Reset new "goal" state
+            if self.method == "plan":
+                if "img_feat" in data.keys():
+                    data["goal_feat"] = data["img_feat"][num_seq:num_seq+1,...]
+                    data["goal_pe"] = data["img_pe"][num_seq:num_seq+1,...]
+                else:
+                    data["goal"] = data["rgb"][num_seq:num_seq+1,...]
 
             # Recalculate appropriate masking 
             # (also start from the begining of the seq)
@@ -657,31 +689,33 @@ class DataAugmentation:
         return data
     
     def seq_masking(self, data):
-        """Encoder input sequence masking function. Doesn't mask inputs to decoder"""
+        """Encoder input sequence masking function. Masks a specfic timestep for all inputs.
+        Doesn't mask inputs to decoder"""
         if "rgb" in data.keys():
             n_cam = data["rgb"].shape[1]
         elif "img_feat" in data.keys():
             n_cam = data["img_feat"].shape[1]
-        n_seq = (2 + n_cam) # HARDCODED
-        enc_inp_len = self.max_seq_len * n_seq
 
-        # Randomly apply mask to each input item
-        enc_mask = torch.rand(enc_inp_len) < self.seq_masking_rate
-        enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
-        enc_mask = enc_mask.fill_diagonal_(False)
+        # Randomly apply mask to each input timestep
+        enc_mask = torch.rand(self.max_seq_len) < self.seq_masking_rate
+        enc_mask = enc_mask.unsqueeze(0).repeat(self.max_seq_len, 1)
+        enc_mask = enc_mask.fill_diagonal_(False) # Allow self attention
 
         data["enc_mask"] = enc_mask
 
-        # Check if mask + padding yield a fully masked input sequence
+        # Check if mask + padding yields a fully masked input sequence
         # If so, deactivate the input mask
-        if torch.all(data["seq_pad_mask"].repeat(n_seq) | data["enc_mask"][0,:]):
-            data["enc_mask"] = torch.zeros_like(data["enc_mask"])
+        if torch.all(data["seq_pad_mask"] | data["enc_src_mask"][0,:]):
+            data["enc_src_mask"] = torch.zeros_like(data["enc_src_mask"])
 
         return data
 
     def type_masking(self, data):
         """Encoder/decoder type masking function. 
         Always leaves at least 1 unmasked input type."""
+
+        raise NotImplementedError
+
         if "rgb" in data.keys():
             n_cam = data["rgb"].shape[1]
         elif "img_feat" in data.keys():

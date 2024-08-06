@@ -136,22 +136,29 @@ class TSkillCVAE(nn.Module):
         actions = data["actions"].to(self._device)
         seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
-        enc_mask = data.get("enc_mask", None)
-        if enc_mask is not None: # Reshape masks based on number of transformer heads: (N,S,S) -> (N*nhead,S,S)
-            enc_mask = enc_mask.to(self._device, torch.bool)
-            enc_mask = torch.cat([enc_mask[i:i+1,:,:].repeat(self.encoder.nhead,1,1) for i in range(enc_mask.shape[0])])
-        
-        ### Get autoregressive masks, if applicable
+        enc_src_mask = data.get("enc_src_mask", None)
+        ### Get causal/other masks, if applicable
+        # Encoder causal or normal mask
+        if enc_src_mask is not None: # Reshape masks based on number of transformer heads: (N,S,S) -> (N*nhead,S,S)
+            enc_src_mask = enc_src_mask.to(self._device, torch.bool)
+            enc_src_mask = torch.cat([enc_src_mask[i:i+1,:,:].repeat(self.encoder.nhead,1,1) for i in range(enc_src_mask.shape[0])])
+        # Encoder causal masks
+        if self.encoder_is_causal:
+            enc_mem_mask = data["enc_mem_mask"][0,...].to(self._device)
+            enc_tgt_mask = data["enc_tgt_mask"][0,...].to(self._device)
+        else:
+            enc_mem_mask = enc_tgt_mask = None
+        # Decoder ar masks
         if self.autoregressive_decode:
             if self.conditional_decode: # Use full decoder mask from padded dataset
-                dec_mask = data["dec_src_mask"][0,...].to(self._device)
-                mem_mask = data["dec_mem_mask"][0,...].to(self._device)
+                dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
+                dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
             else: # Only allow attention on one skill at a time
-                dec_mask = ~torch.diag(torch.ones(self.max_skill_len)).to(self._device, torch.bool)
-                mem_mask = data["dec_mem_mask"][0,:,-self.max_skill_len:].to(self._device)
-            tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
+                dec_src_mask = ~torch.diag(torch.ones(self.max_skill_len)).to(self._device, torch.bool)
+                dec_mem_mask = data["dec_mem_mask"][0,:,-self.max_skill_len:].to(self._device)
+            dec_tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
         else:
-            tgt_mask = dec_mask = mem_mask = None
+            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
 
         ### Calculate image features or use precalculated from dataset
         use_precalc = kwargs.get("use_precalc",False)
@@ -165,12 +172,12 @@ class TSkillCVAE(nn.Module):
         ### Encode inputs to latent
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
                                             seq_pad_mask, skill_pad_mask, 
-                                            enc_mask, None) # (skill_seq, bs, latent_dim)
+                                            enc_src_mask, enc_mem_mask, enc_tgt_mask) # (skill_seq, bs, latent_dim)
         
         ### Decode skill sequence
         a_hat = self.sequence_decode(z, qpos, actions, (img_src, img_pe),
                                      seq_pad_mask, skill_pad_mask,
-                                     dec_mask, mem_mask, tgt_mask)
+                                     dec_src_mask, dec_mem_mask, dec_tgt_mask)
 
         # Check for NaNs
         if torch.any(torch.isnan(a_hat)):
@@ -181,14 +188,14 @@ class TSkillCVAE(nn.Module):
         # Reorder outputs to match inputs
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
-        logvar = logvar.permute(1,0,2)
+        logvar = logvar.permute(1,0,2) # (bs, seq, latent_dim)
 
         return dict(a_hat=a_hat, mu=mu, logvar=logvar, latent=z)
         
 
     def forward_encode(self, qpos, actions, img_info, 
                        src_pad_mask, tgt_pad_mask, 
-                       src_mask=None, tgt_mask=None):
+                       src_mask=None, mem_mask=None, tgt_mask=None):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         bs, seq, _ = qpos.shape # Use bs for masking
         img_feat, img_pe = img_info # (seq, bs, num_cam, h*w, hidden)
@@ -236,7 +243,11 @@ class TSkillCVAE(nn.Module):
             enc_src = self.enc_src_norm(enc_src)
 
             # Repeat same padding mask for new seq length (same pattern)
-            src_pad_mask = src_pad_mask.repeat(1,(2+num_cam)) 
+            src_pad_mask = src_pad_mask.repeat(1,(2+num_cam)) # (bs, (2+num_cam)*seq)
+            if src_mask is not None:
+                src_mask = src_mask.repeat(1, (2+num_cam), (2+num_cam)) # (bs*nhead, (2+num_cam)*seq, (2+num_cam)*seq)
+            if mem_mask is not None:
+                mem_mask = mem_mask.repeat(1, (2+num_cam)) # (skill_seq, (2+num_cam)*seq)
         else:
             enc_src = action_src # (seq, bs, hidden_dim)
             # obtain seq position embedding for input
@@ -258,14 +269,14 @@ class TSkillCVAE(nn.Module):
         # query encoder model
         enc_output = self.encoder(src=enc_src, 
                                   src_key_padding_mask=src_pad_mask, 
-                                  src_is_causal=False,
+                                  src_is_causal=self.encoder_is_causal,
                                   src_mask=src_mask,
                                   memory_key_padding_mask=src_pad_mask,
-                                  memory_mask=None,
-                                  memory_is_causal=False, 
+                                  memory_mask=mem_mask,
+                                  memory_is_causal=self.encoder_is_causal, 
                                   tgt=enc_tgt,
                                   tgt_key_padding_mask=tgt_pad_mask,
-                                  tgt_is_causal=False,
+                                  tgt_is_causal=self.encoder_is_causal,
                                   tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
 
         latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
@@ -301,6 +312,17 @@ class TSkillCVAE(nn.Module):
         returns:
             a_hat: (seq, bs, act_dim)
         """
+        if tgt is not None:
+            tgt = tgt.to(self._device)
+        if src_mask is not None:
+            src_mask = src_mask.to(self._device)
+        if mem_mask is not None:
+            mem_mask = mem_mask.to(self._device)
+        if tgt_mask is not None:
+            tgt_mask = tgt_mask.to(self._device)
+        src_pad_mask = src_pad_mask.to(self._device)
+        tgt_pad_mask = tgt_pad_mask.to(self._device)
+
         bs = z.shape[1]
 
         # Get a batch mask for handling fully padded inputs during training
@@ -399,8 +421,8 @@ class TSkillCVAE(nn.Module):
         Decode a sequence of skills into actions given a demo trajectory
         args:
             z: (skill_seq, bs, latent_dim)
-            qpos: (seq, bs, state_dim)
-            actions: (seq, bs, act_dim)
+            qpos: (bs, seq, state_dim)
+            actions: (bs, seq, act_dim)
             img_info: (img_src, img_pe): (seq, bs, num_cam, h*w, c & hidden)
             seq_pad_mask: (bs, seq)
             skill_pad_mask: (bs, skill_seq)
