@@ -1,13 +1,13 @@
 method: plan
-notes: Planning run with better vae from 053 (higher z dim)
+notes: Planning run with higher subsequencing, as well as single step decoder autoregression (only tgt self attention)
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
-  augment: False
+  augment: True
   augmentation:
-    subsequence_rate: 0
+    subsequence_rate: 0.67
     image_aug: 0
   max_count: 50
   indices:
@@ -18,27 +18,27 @@ model:
   hidden_dim: 256
   dropout : 0.1
   nheads : 4
-  dim_feedforward : 256
-  enc_layers : 3
-  dec_layers : 5
+  dim_feedforward : 512
+  enc_layers : 4
+  dec_layers : 6
   pre_norm : False
   conditional_decode: False
 
 loss:
-  z_weight: 1
+  z_weight: 2
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/008
+  out_dir: out/PegInsertion/Plan/011
   train_vae: True
   max_it: 30000
-  batch_size: 8
-  batch_size_val: 8
+  batch_size: 10
+  batch_size_val: 10
   print_every: 25
-  visualize_every: 250
+  visualize_every: 500
   checkpoint_every: 500
-  validate_every: 250
-  backup_every: 500
+  validate_every: 300
+  backup_every: 1000
   model_selection_metric: act_plan_loss
   model_selection_mode: minimize
   n_workers: 2

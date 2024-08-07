@@ -312,6 +312,7 @@ class TSkillCVAE(nn.Module):
         returns:
             a_hat: (seq, bs, act_dim)
         """
+        ### Move inputs to device (needed for evaluation)
         if tgt is not None:
             tgt = tgt.to(self._device)
         if src_mask is not None:
@@ -327,7 +328,7 @@ class TSkillCVAE(nn.Module):
 
         # Get a batch mask for handling fully padded inputs during training
         batch_mask = torch.all(src_pad_mask, dim=1)
-        if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which happens often during training.
+        if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which happens during training.
             return torch.zeros(self.max_skill_len, bs, self.action_dim, device=self._device)
 
         # obtain learned postition embedding for z, state, & img inputs
@@ -381,7 +382,7 @@ class TSkillCVAE(nn.Module):
         dec_tgt = dec_tgt + dec_tgt_pe
         dec_tgt = self.dec_tgt_norm(dec_tgt)
 
-        # src padding mask should pad unused skills but not other inputs TODO DOUBLE CHECK
+        # src padding mask should pad unused skills but not other inputs
         src_pad_mask = torch.cat([torch.zeros(bs, dec_src.shape[0]-src_pad_mask.shape[1]).to(self._device),
                                   src_pad_mask], dim=1)
         
@@ -402,8 +403,7 @@ class TSkillCVAE(nn.Module):
                                   tgt_is_causal=self.autoregressive_decode,
                                   tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
 
-        # Send decoder output through MLP and project to action dimensions
-        # a_head = self.dec_action_head(dec_output) # (MSL, bs, 32)
+        # Send project output to action dimensions
         a_joint = self.dec_action_joint_proj(dec_output) # (MSL, bs, action_dim - 1)
         a_grip = self.dec_action_gripper_proj(dec_output) # (MSL, bs, 1)
         a_hat = torch.cat((a_joint, a_grip), -1) # (MSL, bs, action_dim)
@@ -446,13 +446,13 @@ class TSkillCVAE(nn.Module):
 
             # Get target actions for autoregressive decoding
             if self.autoregressive_decode:
-                # Always set first input as zeros, as "start" token, and shift other actions to the right
+                # Always set first input as zeros, as "start" token, and shift other tgt actions right
                 tgt_0 = torch.zeros(bs, 1, self.action_dim, device=self._device)
                 tgt = torch.cat((tgt_0, actions[:,t:tf-1,:]), dim=1) # (bs, MSL, act_dim)
                 # If decoding autoregressively, need to pass in all states and img_infos that will be encountered
                 qpos_t = qpos[:,t:tf,:] # (bs, MSL, state_dim)
                 img_info_t = (img_src[t:tf,...], img_pe[t:tf,...]) # (MSL, bs, num_cam, h*w, c)
-                # Need to repeat skills to have them attend to different conditional info at different steps
+                # Need to repeat skills to allow them attend to different conditional info at different steps
                 sk_z = sk_z.repeat(self.max_skill_len,1,1) # (MSL, bs, latent_dim)
             else:
                 tgt = None

@@ -297,7 +297,8 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     for the specific order that is used in the SkillVAE model
     """
     dec_src_len = max_skill_len * (2 + num_img_feats) # (MSL*(q + img_feats + z))
-    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
     mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
     dec_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
     
@@ -645,17 +646,12 @@ class DataAugmentation:
             # Uniformly sample how much of the sequence to use for the batch
             # from 1 to entire (unpadded) seq
             num_seq = torch.randint(1, num_unpad_seq+1, (1,1)).squeeze()
-
-            # Pick a random index to start at in the possible window
-            window = num_unpad_seq - num_seq
-            seq_idx_start = torch.randint(0, window+1, (1,1)).squeeze()
-            seq_idx_end = seq_idx_start + num_seq
             
             # Reset "new" sequences to the beginning (for positional encodings)
             for k,v in data.items():
                 if "mask" not in k and "goal" not in k:
                     new_seq = torch.zeros_like(v)
-                    new_seq[:num_seq,...] = v[seq_idx_start:seq_idx_end,...]
+                    new_seq[:num_seq,...] = v[:num_seq,...]
                     data[k] = new_seq
 
             # Reset new "goal" state

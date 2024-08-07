@@ -201,7 +201,8 @@ class SimLoss():
                 if vae.autoregressive_decode:
                     if t_plan % MSL == 0: # Decode new sequence
                         tgt = torch.zeros(1,1,vae.action_dim, device=model._device)
-                    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
+                    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
+                    tgt_mask = ~(torch.eye(tgt.shape[1]))
                     seq_pad_mask = torch.zeros(1,tgt.shape[1])
                     with torch.no_grad():
                         a_hat = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 
@@ -256,6 +257,7 @@ class SimLoss():
 
         output = dict(sim_act_loss=np.mean([v["sim_act_loss"].item() for k,v in outputs.items()]).item(),
                       success_rate=np.mean([v["success"].astype(np.int16).item() for k,v in outputs.items()]).item())
-
+        
+        print("sim_act_loss: ", output["sim_act_loss"])
 
         return output
