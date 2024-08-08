@@ -1,6 +1,18 @@
 # Import required packages
 # Unless otherwise stated, copy/pasted from ms2dataset
 
+"""
+convert data to index map:image data
+
+get the mesh
+convert to occ np array
+
+do the camera data transform to global coords
+
+
+check by plotting over eachother
+"""
+
 import os
 import os.path
 import h5py
@@ -135,7 +147,8 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
     """Class that preps data for ConvONet processing"""
     def __init__(self, dataset_file: str, indices: list = None, 
                  max_seq_len: int = 0, pad: bool = False, 
-                 augmentation= None) -> None:
+                 augmentation= None, single_cam: bool = False,
+                 camera: int = 0) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -149,6 +162,8 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
         self.max_seq_len = max_seq_len
         self.pad = pad
         self.augmentation = augmentation
+        self.single_cam = single_cam
+        self.camera = camera
 
     def __len__(self):
         return len(self.owned_indices)
@@ -167,8 +182,11 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
         rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
         rgbd = rgbd.tolist()
         for seq, seq_data in tqdm(enumerate(rgbd)):
-            for cam, cam_data in enumerate(seq_data):
-                rgbd[seq][cam] = generate_input_vector(cam_data)
+            if self.single_cam:
+                rgbd[seq][self.camera] = generate_input_vector(rgbd[seq][self.camera])
+            else:
+                for cam, cam_data in enumerate(seq_data):
+                    rgbd[seq][cam] = generate_input_vector(cam_data)
         
         rgbd = torch.tensor(rgbd).float()
 
@@ -198,14 +216,66 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
                 data[k] = v.unsqueeze(0)
 
         return data
+
+
+class ManiSkillConvONetDataset_V2(ManiSkillDataset):
+    def __init__(self, dataset_file: str, indices: list = None, 
+                 max_seq_len: int = 0) -> None:
+        self.dataset_file = dataset_file
+        self.data = h5py.File(dataset_file, "r")
+        json_path = dataset_file.replace(".h5", ".json")
+        self.json_data = load_json(json_path)
+        self.episodes = self.json_data["episodes"]
+        self.env_info = self.json_data["env_info"]
+        self.env_id = self.env_info["env_id"]
+        self.env_kwargs = self.env_info["env_kwargs"]
+        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
+
+        # input map - keys are location, items are image info (episode, sequence, camera):transformed image data
+        self.datamap = dict()
+        
+        for i, idx in enumerate(indices):
+            eps = self.episodes[self.owned_indices[i]]
+            trajectory = self.data[f"traj_{eps['episode_id']}"]
+            trajectory = load_h5_data(trajectory)
+
+            # convert the original raw observation with our batch-aware function
+            obs = convert_observation(trajectory["obs"])
+            
+            # we use :-1 to ignore the last obs as terminal observations are included
+            rgbd = obs["rgbd"][:-1]
+            rgbd = rescale_rgbd(rgbd, separate_cams=True)
+            rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
+            for seq, seq_data in tqdm(enumerate(rgbd)):
+                for cam in range(len(seq_data)):
+                    self.datamap[(idx, seq, cam)] = generate_input_vector(rgbd[seq][cam])
+        
+    def __len__(self):
+        return len(self.datamap.keys())
     
-# Need to edit/rewrite this for Conv Occ Net - idea: create scene by scene reconstructions using only the RGBD inputs
+    def __getitem__(self, idx):
+        ep, seq, cam = list(self.datamap.keys())[idx]
+        inputs = torch.tensor(self.datamap[(ep, seq, cam)]).float()
+
+        # eps = self.episodes[self.owned_indices[loc[0]]]
+        # trajectory = self.data[f"traj_{eps['episode_id']}"]
+        # trajectory = load_h5_data(trajectory)
+        # get the ground truth from ep seq, cam
+        # ground_truth = trajectory["truth"][seq][cam]
+
+        data = dict(inputs=inputs)
+        
+        # for k,v in data.items():
+        #         data[k] = v.unsqueeze(0)
+
+        return data
+    
+
 def get_MS_loaders(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
-        augment: bool = cfg["data"].get("augment", False) # Augmentation
         count = cfg_data.get("max_count", None) # Dataset count limitations
 
         assert os.path.exists(dataset_file)
@@ -221,30 +291,31 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             num_episodes = count
 
         # If a max sequence length isn't passed need to find it from the data to allow batching
-        max_seq_len = cfg_data.get("max_seq_len", 0)
-        if not max_seq_len:
-            print("Computing max sequence length...")
-            for idx in tqdm(range(num_episodes)):
-                eps = episodes[idx]
-                trajectory = data[f"traj_{eps['episode_id']}"]
-                trajectory = load_h5_data(trajectory)
-                seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
-                if seq_size > max_seq_len:
-                    max_seq_len = seq_size
-            print("Max sequence length found to be: ", max_seq_len)
+        # max_seq_len = cfg_data.get("max_seq_len", 0)
+        
+        # if not max_seq_len:
+        #     print("Computing max sequence length...")
+        #     for idx in tqdm(range(num_episodes)):
+        #         eps = episodes[idx]
+        #         trajectory = data[f"traj_{eps['episode_id']}"]
+        #         trajectory = load_h5_data(trajectory)
+        #         seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
+        #         if seq_size > max_seq_len:
+        #             max_seq_len = seq_size
+        #     print("Max sequence length found to be: ", max_seq_len)
 
+        
         print("Collecting all observations...")
         for idx in tqdm(range(num_episodes)):
             eps = episodes[idx]
             trajectory = data[f"traj_{eps['episode_id']}"]
             trajectory = load_h5_data(trajectory)
-            obs = convert_observation(trajectory["obs"])
-
-        path = os.path.join(cfg["training"]["out_dir"],'scaling_functions.pickle')            
+            obs = convert_observation(trajectory["obs"])            
 
         # Try loading exiting train/val split indices
         existing_indices = kwargs.get("indices", None)
         path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
+        
         if existing_indices is None:
             indices = list(range(num_episodes))
             
@@ -266,36 +337,21 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             #     print("Creating new train/val index file")
             #     with open(path,'xb') as f:
             #         pickle.dump((train_idx, val_idx), f)
-        elif existing_indices=="file":
-            assert os.path.exists(path), "out directory does not contain index file"
-            print(f"Loading indices from file: {path}")
-            with open(path,'rb') as f:
-                    train_idx, val_idx = pickle.load(f)
-        else:
-            train_idx, val_idx = existing_indices
+        
+        # elif existing_indices=="file":
+        #     assert os.path.exists(path), "out directory does not contain index file"
+        #     print(f"Loading indices from file: {path}")
+        #     with open(path,'rb') as f:
+        #             train_idx, val_idx = pickle.load(f)
+        # else:
+        #     train_idx, val_idx = existing_indices
 
-        # Apply augmentations
-        if augment:
-            train_augmentation = DataAugmentation(cfg)
-            if cfg["data"]["augmentation"].get("val_augmentation",False):
-                val_augmentation = train_augmentation
-            else:
-                val_augmentation = None
-        else:
-            train_augmentation = None
-            val_augmentation = None
-
-        # Get padding config
-        pad_train = cfg_data.get("pad_train", True)
-        pad_val = cfg_data.get("pad_val", True)
+        print("Training Indices: " + str(train_idx))
+        print("Validation Indices: " + str(val_idx))
 
         # Create datasets
-        train_dataset = ManiSkillConvONetDataSet(dataset_file, train_idx, 
-                                               max_seq_len,
-                                               pad_train, train_augmentation)
-        val_dataset = ManiSkillConvONetDataSet(dataset_file, val_idx, 
-                                             max_seq_len,
-                                             pad_val, val_augmentation)
+        train_dataset = ManiSkillConvONetDataset_V2(dataset_file, train_idx)
+        val_dataset = ManiSkillConvONetDataset_V2(dataset_file, val_idx)
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset
@@ -415,10 +471,7 @@ import matplotlib.animation as animation
 
 if __name__ == "__main__":
     path = "tskill/data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-    dataset = ManiSkillConvONetDataSet(path)
-
-    # print(dataset[0]["rgbd"][0][0][0])
-
+    dataset = ManiSkillConvONetDataset_V2(path, indices=[0])
 
     animate = False
     pointcloud = False
