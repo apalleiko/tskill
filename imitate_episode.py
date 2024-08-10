@@ -167,7 +167,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     # Model
     model: TSkillCVAE = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
+    load_dict = checkpoint_io.load("model.pt")
     model.to(model._device)
     model.eval()
     if args.cond_dec is not None:
@@ -353,7 +353,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                         pbar.update()
                     
                     # Obtain data in the proper form
-                    o = convert_observation(obs, robot_state_only=True, pos_only=True)
+                    o = convert_observation(obs, robot_state_only=True, pos_only=False)
                     qpos = torch.from_numpy(o["state"]).float().unsqueeze(0).unsqueeze(0).to(model._device)
                     rgbd = o["rgbd"]
                     rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
@@ -405,8 +405,9 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     # Decode latent into actions
                     if vae.autoregressive_decode:
                         if t_plan % MSL == 0: # Decode new sequence
-                            tgt = torch.zeros(1,1,model.action_dim)
-                        tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
+                            tgt = torch.zeros(1,1,vae.action_dim)
+                        # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
+                        tgt_mask = ~(torch.eye(tgt.shape[1]).to(torch.bool))
                         seq_pad_mask = torch.zeros(1,tgt.shape[1])
                         with torch.no_grad():
                             a_pred = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 

@@ -114,13 +114,13 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 5
-        cfg["training"]["visualize_every"] = 1
+        cfg["training"]["batch_size"] = 8
+        cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 1
+        cfg["training"]["validate_every"] = 20
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 2
+        cfg["training"]["max_it"] = 20
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)

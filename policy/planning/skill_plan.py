@@ -117,10 +117,13 @@ class TSkillPlan(nn.Module):
 
         ### Autoregressively plan skills
         bs, MNS = skill_pad_mask.shape
+        sep_vae_grad = kwargs.get("sep_vae_grad",False)
         if is_training:
             vae_out = self.vae(data, use_precalc=use_precalc)
             z_tgt0 = torch.zeros(1,bs,self.z_dim, device=self._device)
             z_tgt = vae_out["mu"].permute(1,0,2) # (skill_seq, bs, z_dim)
+            if sep_vae_grad:
+                z_tgt = z_tgt.clone().detach() # Separate output z from grad calculations
             z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...]))
             plan_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(z_tgt.shape[0], device=self._device)
             z_hat = self.forward_plan((goal_src, goal_pe), 
@@ -130,10 +133,13 @@ class TSkillPlan(nn.Module):
                                        None, None, plan_tgt_mask) # (skill_seq, bs, latent_dim)
             
             ### Decode skills one at a time, possibly with conditional state & image info from current state
+            if sep_vae_grad: # Turn off vae grad calculation for sequence decoding on pred z
+                self.vae.requires_grad_(False)
             a_hat = self.vae.sequence_decode(z_hat, qpos, actions, (img_src, img_pe),
                                             seq_pad_mask, skill_pad_mask,
                                             dec_src_mask, dec_mem_mask, dec_tgt_mask)
-            
+            if sep_vae_grad:
+                self.vae.requires_grad_(True)
             a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         else:
             z_tgt = data["z_tgt"] # (tgt_seq, bs, z_dim)

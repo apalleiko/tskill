@@ -308,7 +308,7 @@ class TSkillCVAE(nn.Module):
             src_mask: (bs, MSL*(2+num_features*num_cam), ")
             mem_mask: (bs, MSL, MSL*(2+num_features*num_cam))
             tgt_mask: (bs, MSL|<, MSL|<)
-            tgt: (MSL|<, bs, act_dim)
+            tgt: (bs, MSL|<, act_dim)
         returns:
             a_hat: (seq, bs, act_dim)
         """
@@ -375,6 +375,9 @@ class TSkillCVAE(nn.Module):
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
             dec_tgt_pe = self.get_pos_table(tgt.shape[1]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
+            # In current AR scheme, each action can only attend to itself and conditional info from that timestep
+            # so keeping a pad mask leads to NaNs. Padded action outputs are ignored in loss downstream.
+            tgt_pad_mask[:, :] = False 
         else:
             dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL, 1, hidden_dim)
             dec_tgt  = torch.zeros_like(dec_tgt_pe)

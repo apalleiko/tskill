@@ -34,8 +34,8 @@ def convert_observation(observation, robot_state_only, pos_only=True):
         else:
             state = np.hstack(
             [
-                flatten_state_dict(observation["agent"]["qpos"]),
-                flatten_state_dict(observation["agent"]["qvel"]),
+                observation["agent"]["qpos"],
+                observation["agent"]["qvel"],
             ]
         )
     else:
@@ -175,7 +175,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         trajectory = load_h5_data(trajectory)
 
         # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"], robot_state_only=True)
+        obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
         
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions

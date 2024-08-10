@@ -14,31 +14,42 @@ class Trainer(BaseTrainer):
     def __init__(
         self,
         cfg,
-        model: TSkillPlan,
+        model,
         optimizer,
         device=None,
         scheduler=None
     ):
         self.epoch_it = 0
         self.step_it = 0
-        self.zero_grad = True
 
-        self.model = model
+        self.model: TSkillPlan = model
         self.optimizer = optimizer
         self.device = device
         self.scheduler = scheduler
 
+        # Whether to train VAE
         self.train_vae = cfg["training"]["train_vae"]
         if self.train_vae:
             self.vae_trainer = get_trainer(self.model.vae, None, cfg["vae_cfg"], self.device, None)
+
         self.z_weight = cfg["loss"]["z_weight"]
         self.act_weight = cfg["loss"]["act_weight"]
-        self.gradient_accumulation = cfg["training"].get("gradient_accumulation",1)
+
+        # Precalc featuer availability
         aug_cond = not cfg["data"]["augmentation"].get("image_aug",0) or not cfg["data"]["augment"]
         stt_cond = not cfg["training"]["lr_state_encoder"]
         self.use_precalc = cfg["training"].get("use_precalc",False)
         if self.use_precalc:
             assert aug_cond and stt_cond
+
+        # Get alternative training configs
+        self.alt_ratio = cfg["training"].get("fraction_alt",0)
+        if self.alt_ratio > 0:
+            self.val_alt = cfg["training"].get("val_alt",False)
+            self.batch_size_alt = cfg["training"].get("batch_size_alt",1)
+            self.alt_batch_num = int(cfg["training"]["batch_size"] / self.batch_size_alt)
+        else:
+            self.val_alt = False
 
     def epoch_step(self):
         if self.scheduler is not None and self.epoch_it > 0:
@@ -47,25 +58,46 @@ class Trainer(BaseTrainer):
 
     def train_step(self, data):
         self.model.train()
-        if self.zero_grad:
-            self.optimizer.zero_grad()
-            self.zero_grad = False
-        loss_dict, metric_dict = self.compute_loss(data)
+        self.optimizer.zero_grad()
+
+        if self.alt_ratio > 0 and (self.step_it + 1) % int(1 / self.alt_ratio) == 0:
+            mb_losses, mb_metrics = [], []
+            for n in range(self.alt_batch_num):
+                mb_s = self.batch_size_alt*n
+                mb_e = mb_s + self.batch_size_alt
+                mb_data = {k: v[mb_s:mb_e,...] for k,v in data.items()}
+                mb_loss_dict, mb_metric_dict = self.compute_loss(mb_data, alt=True)
+                mb_metrics.append(mb_metric_dict)
+
+                mb_loss = 0.0
+                _dict = {}
+                for k, v in mb_loss_dict.items():
+                    mb_loss += v
+                    _dict[k] = v.item()
+                mb_loss_dict = _dict
+                mb_losses.append(mb_loss_dict)
+                mb_loss.backward()
+    
+                del mb_loss
+                del mb_data
+
+            loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
+            metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "traj" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
+        else:
+            loss_dict, metric_dict = self.compute_loss(data)
+
+            loss = 0.0
+            _dict = {}
+            for k, v in loss_dict.items():
+                loss += v
+                _dict[k] = v.item()
+            loss_dict = _dict
+            loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
+        self.optimizer.step()
+
         metric_dict = {k: v for k, v in metric_dict.items()}
-
-        loss = 0.0
-        _dict = {}
-        for k, v in loss_dict.items():
-            loss += v
-            _dict[k] = v.item()
-        loss_dict = _dict
-
-        loss = loss / self.gradient_accumulation
-        loss.backward()
-        if (self.step_it + 1) % self.gradient_accumulation == 0:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
-            self.optimizer.step()
-            self.zero_grad = True
 
         self.step_it += 1
 
@@ -93,12 +125,12 @@ class Trainer(BaseTrainer):
 
     def eval_step(self, data):
         with torch.no_grad():
-            loss_dict, metric_dict = self.compute_loss(data)
+            loss_dict, metric_dict = self.compute_loss(data, alt=self.val_alt)
         loss_dict = {k: v.item() for k, v in loss_dict.items()}
         metric_dict = {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
         return loss_dict, metric_dict
 
-    def compute_loss(self, data):
+    def compute_loss(self, data, **kwargs):
         loss_dict = dict()
         metric_dict = dict()
         a_targ = data["actions"].to(self.device) # (bs, seq, act_dim)
@@ -118,10 +150,16 @@ class Trainer(BaseTrainer):
         num_latent = torch.sum(latent_loss_mask.to(torch.int16))
         
         # Get model outputs
-        out = self.model(data, use_precalc=self.use_precalc)
+        if alt := kwargs.get("alt",False):
+            prev = self.model.vae.conditional_decode
+            self.model.vae.conditional_decode = not prev
+        out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
+        if alt:
+            self.model.vae.conditional_decode = prev
+
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]
-        z_targ = out["vae_out"]["mu"].to(self.device) # (bs, skill_seq, z_dim)
+        z_targ = out["vae_out"]["mu"].to(self.device).clone().detach() # (bs, skill_seq, z_dim)
 
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
@@ -133,16 +171,21 @@ class Trainer(BaseTrainer):
         z_targ_l = z_targ[latent_loss_mask]
         loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
 
-        metric_dict["ahat_vector_traj"] = a_hat
+        metric_dict["aplan_vector_traj"] = a_hat.detach()
+
+        # Compute some metrics
+        for i in [1,10,50,100]:
+            metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1]).detach()
+            metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1]).detach()
 
         for k,v in self.model.metrics.items():
-            metric_dict[k] = v
+            metric_dict[k] = v.detach()
 
         if self.train_vae:
             vae_loss_dict, vae_metric_dict = self.vae_trainer.raw_loss(out["vae_out"], data)
             for k,v in vae_loss_dict.items():
                 loss_dict[f"{k}"] = v
             for k,v in vae_metric_dict.items():
-                metric_dict[f"{k}"] = v
+                metric_dict[f"{k}"] = v.detach()
 
         return loss_dict, metric_dict

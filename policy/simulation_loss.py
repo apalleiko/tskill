@@ -46,7 +46,10 @@ class SimLoss():
         """
 
         method = self.cfg["method"]
-        vae: TSkillCVAE = model.vae
+        if method == "plan":
+            vae: TSkillCVAE = model.vae
+        else:
+            vae = model
 
         MSL = model.max_skill_len
         pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
@@ -147,7 +150,7 @@ class SimLoss():
                     pbar.update()
                 
                 # Obtain data in the proper form
-                o = convert_observation(obs, robot_state_only=True, pos_only=True)
+                o = convert_observation(obs, robot_state_only=True, pos_only=False)
                 qpos = torch.from_numpy(o["state"]).float().unsqueeze(0).unsqueeze(0).to(model._device)
                 rgbd = o["rgbd"]
                 rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
@@ -202,7 +205,7 @@ class SimLoss():
                     if t_plan % MSL == 0: # Decode new sequence
                         tgt = torch.zeros(1,1,vae.action_dim, device=model._device)
                     # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
-                    tgt_mask = ~(torch.eye(tgt.shape[1]))
+                    tgt_mask = ~(torch.eye(tgt.shape[1]).to(torch.bool))
                     seq_pad_mask = torch.zeros(1,tgt.shape[1])
                     with torch.no_grad():
                         a_hat = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 
@@ -250,6 +253,7 @@ class SimLoss():
 
         # Cleanup
         env.close()
+        del env
         ori_h5_file.close()
 
         if pbar is not None:

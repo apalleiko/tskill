@@ -1,5 +1,5 @@
 method: plan
-notes: Planning run with higher subsequencing, as well as single step decoder autoregression (only tgt self attention)
+notes: Cotrain with alt conditional training at the same time as non conditional training. Validates with conditional info.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -7,17 +7,17 @@ data:
   max_seq_len: 200
   augment: True
   augmentation:
-    subsequence_rate: 0.67
+    subsequence_rate: 0.75
     image_aug: 0
-  max_count: 50
+  max_count: 100
   indices:
   full_seq: True
 
 model:
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/053
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/055
   hidden_dim: 256
   dropout : 0.1
-  nheads : 4
+  nheads : 8
   dim_feedforward : 512
   enc_layers : 4
   dec_layers : 6
@@ -25,19 +25,22 @@ model:
   conditional_decode: False
 
 loss:
-  z_weight: 2
+  z_weight: 1
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/011
+  out_dir: out/PegInsertion/Plan/019
   train_vae: True
-  max_it: 30000
-  batch_size: 10
-  batch_size_val: 10
+  max_it: 50000
+  batch_size: 12
+  batch_size_val: 2
+  batch_size_alt: 2
+  fraction_alt: .25
+  val_alt: True
   print_every: 25
   visualize_every: 500
   checkpoint_every: 500
-  validate_every: 300
+  validate_every: 500
   backup_every: 1000
   model_selection_metric: act_plan_loss
   model_selection_mode: minimize
@@ -47,5 +50,4 @@ training:
   lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001
-  gradient_accumulation: 1
   use_precalc: True

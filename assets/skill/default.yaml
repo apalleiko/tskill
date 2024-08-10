@@ -1,5 +1,5 @@
 method: skill
-notes: Base for cotrain run.
+notes: Base with more heads and with qvel in state.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .1
@@ -18,7 +18,7 @@ data:
   full_seq: True
 
 model:
-  state_dim : 9
+  state_dim : 18
   action_dim : 8
   z_dim : 128
   hidden_dim: 256
@@ -30,7 +30,7 @@ model:
   
   encoder:  
     dropout : 0.1
-    nheads : 4
+    nheads : 8
     dim_feedforward : 512
     enc_layers : 3
     dec_layers : 4
@@ -38,7 +38,7 @@ model:
   
   decoder:
     dropout : 0.1
-    nheads : 4
+    nheads : 8
     dim_feedforward : 512
     enc_layers : 3
     dec_layers : 5
@@ -50,18 +50,18 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weights: 0.0001
+  kl_weights: 0.01
 
 training:
-  out_dir: out/PegInsertion/VAE/053
+  out_dir: out/PegInsertion/VAE/055
   max_it: 1
-  batch_size: 4
-  batch_size_val: 4
+  batch_size: 8
+  batch_size_val: 8
   print_every: 25
-  visualize_every: 500
-  checkpoint_every: 1
-  validate_every: 250
-  backup_every: 500
+  visualize_every: 1001
+  checkpoint_every: 1001
+  validate_every: 2
+  backup_every: 1
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
