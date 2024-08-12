@@ -20,14 +20,14 @@ from transforms3d.quaternions import quat2axangle
 import mani_skill2.envs
 from mani_skill2.agents.base_controller import CombinedController
 from mani_skill2.agents.controllers import *
-from mani_skill2.envs.sapien_env import BaseEnv
+from mani_skill2.envs.sapien_env import BaseEnv, merge_meshes, get_articulation_meshes, get_actor_meshes
 from mani_skill2.trajectory.merge_trajectory import merge_h5
 from mani_skill2.utils.common import clip_and_scale_action, inv_scale_action
 from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.sapien_utils import get_entity_by_name
 from mani_skill2.utils.wrappers import RecordEpisode
 
-def gen_scene_mesh(self, num_points: int = int(1e5), exclude_robot = False) -> np.ndarray:
+def gen_scene_mesh(env, num_points: int = int(1e5), exclude_robot = False) -> np.ndarray:
         """
         Taken and modified from ManiSkill/maniskill2/envs/sapien_envs.py
 
@@ -35,15 +35,15 @@ def gen_scene_mesh(self, num_points: int = int(1e5), exclude_robot = False) -> n
         """
 
         meshes = []
-        articulations = self._scene.get_all_articulations()
-        if self.agent is not None and exclude_robot:
-            articulations.pop(articulations.index(self.agent.robot))
+        articulations = env.scene.get_all_articulations()
+        if env.agent is not None and exclude_robot:
+            articulations.pop(articulations.index(env.agent.robot))
         for articulation in articulations:
             articulation_mesh = merge_meshes(get_articulation_meshes(articulation))
             if articulation_mesh:
                 meshes.append(articulation_mesh)
 
-        for actor in self._scene.get_all_actors():
+        for actor in env.scene.get_all_actors():
             actor_mesh = merge_meshes(get_actor_meshes(actor))
             if actor_mesh:
                 meshes.append(
@@ -54,6 +54,7 @@ def gen_scene_mesh(self, num_points: int = int(1e5), exclude_robot = False) -> n
 
         scene_mesh = merge_meshes(meshes)
         scene_pcd = scene_mesh.sample(num_points)
+        print(scene_mesh)
         return scene_mesh
 
 
@@ -309,9 +310,6 @@ def from_pd_joint_delta_pos(
         output_action = controller.from_action_dict(output_action_dict)
         _, _, _, _, info = env.step(output_action)
 
-        if get_gt:
-            info["ground_truth"] = env.gen_scene_mesh()
-
         if render:
             env.render_human()
 
@@ -395,6 +393,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     target_control_mode = args.target_control_mode
     cam_res = args.cam_res
     add_seg = args.add_seg
+
     env_kwargs = ori_env_kwargs.copy()
     if target_obs_mode is not None:
         env_kwargs["obs_mode"] = target_obs_mode
@@ -429,7 +428,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     output_dir = os.path.dirname(traj_path)
     ori_traj_name = os.path.splitext(os.path.basename(traj_path))[0]
     suffix = "{}.{}".format(env.obs_mode, env.control_mode)
-    new_traj_name = ori_traj_name + "." + suffix
+    new_traj_name = ori_traj_name + "." + suffix + "_gt"
     if num_procs > 1:
         new_traj_name = new_traj_name + "." + str(proc_id)
     env = RecordEpisode(
@@ -515,6 +514,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     pbar=pbar,
                     verbose=args.verbose,
                 )
+                
 
             # From joint delta position to others
             elif ori_control_mode == "pd_joint_delta_pos":
@@ -528,6 +528,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     verbose=args.verbose,
                     get_gt=args.get_gt
                 )
+                # info["ground_truth"] = gen_scene_mesh(env)
+                # print("ran")
 
             success = info.get("success", False)
             if args.discard_timeout:
