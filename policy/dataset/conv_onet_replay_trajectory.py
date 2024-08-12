@@ -366,10 +366,18 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         env_kwargs["obs_mode"] = target_obs_mode
     if target_control_mode is not None:
         env_kwargs["control_mode"] = target_control_mode
+    
+    env_kwargs["camera_cfgs"] = dict()
+
     if cam_res is not None:
-        env_kwargs["camera_cfgs"] = dict(width=cam_res, height=cam_res)
+        env_kwargs["camera_cfgs"]["width"]=cam_res
+        env_kwargs["camera_cfgs"]["height"]=cam_res
     if add_seg is not None:
-        env_kwargs["camera_cfgs"].add(dict(add_segmentation=True))
+        env_kwargs["camera_cfgs"]["add_segmentation"]=True
+    
+    if not env_kwargs["camera_cfgs"]:
+        env_kwargs.pop("camera_cfgs")
+    
     env_kwargs["bg_name"] = args.bg_name
     env_kwargs[
         "render_mode"
@@ -539,3 +547,5 @@ if __name__ == "__main__":
     # spawn is needed due to warp init issue
     mp.set_start_method("spawn")
     main(parse_args())
+
+    # python -m policy/dataset/conv_onet_replay_trajectory.py --traj-path data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5 --save-traj --obs-mode rgbd --target-control-mode pd_joint_delta_pos --cam-res 128 --add_seg
