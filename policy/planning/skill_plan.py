@@ -93,6 +93,10 @@ class TSkillPlan(nn.Module):
         ### Get autoregressive masks, if applicable
         if self.vae.autoregressive_decode and is_training:
             if self.vae.conditional_decode: # Use full decoder mask from padded dataset
+                if 0 in data["dec_src_mask"].shape:
+                    with open("ERROR_DATA.pickle",'+wb') as f:
+                        pickle.dump(data, f)
+                    raise ValueError(f"zero size detected")
                 dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
                 dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
             else: # Only allow attention on one skill at a time

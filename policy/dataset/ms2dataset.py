@@ -552,10 +552,10 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         print(f"Shuffling: {shuffle}")
         train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
                                    num_workers=cfg["training"]["n_workers"],
-                                   pin_memory=True, drop_last=False, shuffle=shuffle)
+                                   pin_memory=True, drop_last=True, shuffle=shuffle)
         val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
                                  num_workers=cfg["training"]["n_workers_val"], 
-                                 pin_memory=True, drop_last=False, shuffle=shuffle)
+                                 pin_memory=True, drop_last=True, shuffle=shuffle)
         
         return train_loader, val_loader
 
@@ -657,10 +657,10 @@ class DataAugmentation:
             # Reset new "goal" state
             if self.method == "plan":
                 if "img_feat" in data.keys():
-                    data["goal_feat"] = data["img_feat"][num_seq:num_seq+1,...]
-                    data["goal_pe"] = data["img_pe"][num_seq:num_seq+1,...]
+                    data["goal_feat"] = data["img_feat"][num_seq-1:num_seq,...]
+                    data["goal_pe"] = data["img_pe"][num_seq-1:num_seq,...]
                 else:
-                    data["goal"] = data["rgb"][num_seq:num_seq+1,...]
+                    data["goal"] = data["rgb"][num_seq-1:num_seq,...]
 
             # Recalculate appropriate masking 
             # (also start from the begining of the seq)

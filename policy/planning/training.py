@@ -66,7 +66,13 @@ class Trainer(BaseTrainer):
                 mb_s = self.batch_size_alt*n
                 mb_e = mb_s + self.batch_size_alt
                 mb_data = {k: v[mb_s:mb_e,...] for k,v in data.items()}
-                mb_loss_dict, mb_metric_dict = self.compute_loss(mb_data, alt=True)
+                try:
+                    mb_loss_dict, mb_metric_dict = self.compute_loss(mb_data, alt=True)
+                except ValueError:
+                    print(n)
+                    print(mb_s, mb_e)
+                    print({k:v.shape for k,v in mb_data.items()})
+                    assert 1==0
                 mb_metrics.append(mb_metric_dict)
 
                 mb_loss = 0.0
@@ -97,8 +103,7 @@ class Trainer(BaseTrainer):
         torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
         self.optimizer.step()
 
-        metric_dict = {k: v for k, v in metric_dict.items()}
-
+        {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
         self.step_it += 1
 
         return loss_dict, metric_dict
@@ -151,11 +156,10 @@ class Trainer(BaseTrainer):
         
         # Get model outputs
         if alt := kwargs.get("alt",False):
-            prev = self.model.vae.conditional_decode
-            self.model.vae.conditional_decode = not prev
+            self.model.vae.conditional_decode = True
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
-            self.model.vae.conditional_decode = prev
+            self.model.vae.conditional_decode = False
 
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]

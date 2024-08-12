@@ -51,6 +51,9 @@ class SimLoss():
         else:
             vae = model
 
+        if alt := self.cfg["training"].get("val_alt",False):
+            vae.conditional_decode = True
+
         MSL = model.max_skill_len
         pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
 
@@ -258,6 +261,9 @@ class SimLoss():
 
         if pbar is not None:
             pbar.close()
+
+        if alt:
+            vae.conditional_decode = False
 
         output = dict(sim_act_loss=np.mean([v["sim_act_loss"].item() for k,v in outputs.items()]).item(),
                       success_rate=np.mean([v["success"].astype(np.int16).item() for k,v in outputs.items()]).item())

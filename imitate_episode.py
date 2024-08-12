@@ -120,6 +120,12 @@ def parse_args(args=None):
         type=int,
         default=200,
         help="rate at which to replan latent vector for planning model",
+    )    
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="max episode steps",
     )
     parser.add_argument(
         "--vae",
@@ -187,7 +193,10 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     env_info = json_data["env_info"]
     env_id = env_info["env_id"]
     ori_env_kwargs = env_info["env_kwargs"]
-    max_episode_steps = env_info["max_episode_steps"]
+    if args.max_steps is not None:
+        max_episode_steps = args.max_steps
+    else:
+        max_episode_steps = env_info["max_episode_steps"]
 
     # Create a twin env with the original kwargs
     if args.target_control_mode is not None:
