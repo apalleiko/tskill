@@ -27,6 +27,35 @@ from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.sapien_utils import get_entity_by_name
 from mani_skill2.utils.wrappers import RecordEpisode
 
+def gen_scene_mesh(self, num_points: int = int(1e5), exclude_robot = False) -> np.ndarray:
+        """
+        Taken and modified from ManiSkill/maniskill2/envs/sapien_envs.py
+
+        Generate scene mesh to use as ground truth
+        """
+
+        meshes = []
+        articulations = self._scene.get_all_articulations()
+        if self.agent is not None and exclude_robot:
+            articulations.pop(articulations.index(self.agent.robot))
+        for articulation in articulations:
+            articulation_mesh = merge_meshes(get_articulation_meshes(articulation))
+            if articulation_mesh:
+                meshes.append(articulation_mesh)
+
+        for actor in self._scene.get_all_actors():
+            actor_mesh = merge_meshes(get_actor_meshes(actor))
+            if actor_mesh:
+                meshes.append(
+                    actor_mesh.apply_transform(
+                        actor.get_pose().to_transformation_matrix()
+                    )
+                )
+
+        scene_mesh = merge_meshes(meshes)
+        scene_pcd = scene_mesh.sample(num_points)
+        return scene_mesh
+
 
 def qpos_to_pd_joint_delta_pos(controller: PDJointPosController, qpos):
     assert type(controller) == PDJointPosController
@@ -246,6 +275,7 @@ def from_pd_joint_delta_pos(
     render=False,
     pbar=None,
     verbose=False,
+    get_gt=False
 ):
     n = len(ori_actions)
     if pbar is not None:
@@ -278,6 +308,9 @@ def from_pd_joint_delta_pos(
         output_action_dict["arm"] = arm_action
         output_action = controller.from_action_dict(output_action_dict)
         _, _, _, _, info = env.step(output_action)
+
+        if get_gt:
+            info["ground_truth"] = env.gen_scene_mesh()
 
         if render:
             env.render_human()
@@ -331,6 +364,7 @@ def parse_args(args=None):
         help="number of demonstrations to replay before exiting. By default will replay all demonstrations",
     )
     parser.add_argument("--add_seg", action="store_true")
+    parser.add_argument("--get_gt", action="store_true")
 
     return parser.parse_args(args)
 
@@ -492,6 +526,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     render=args.vis,
                     pbar=pbar,
                     verbose=args.verbose,
+                    get_gt=args.get_gt
                 )
 
             success = info.get("success", False)
