@@ -66,13 +66,7 @@ class Trainer(BaseTrainer):
                 mb_s = self.batch_size_alt*n
                 mb_e = mb_s + self.batch_size_alt
                 mb_data = {k: v[mb_s:mb_e,...] for k,v in data.items()}
-                try:
-                    mb_loss_dict, mb_metric_dict = self.compute_loss(mb_data, alt=True)
-                except ValueError:
-                    print(n)
-                    print(mb_s, mb_e)
-                    print({k:v.shape for k,v in mb_data.items()})
-                    assert 1==0
+                mb_loss_dict, mb_metric_dict = self.compute_loss(mb_data, alt=True)
                 mb_metrics.append(mb_metric_dict)
 
                 mb_loss = 0.0

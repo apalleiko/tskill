@@ -1,8 +1,8 @@
 method: plan
-notes: Cotrain with alt conditional training at the same time as non conditional training. Validates with conditional info.
+notes: Continutation of 018.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
-  val_split: .1
+  val_split: .2
   preshuffle: False
   max_seq_len: 200
   augment: True
@@ -29,18 +29,18 @@ loss:
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/019
+  out_dir: out/PegInsertion/Plan/018
   train_vae: True
   max_it: 50000
   batch_size: 12
-  batch_size_val: 2
-  batch_size_alt: 1
-  fraction_alt: .2
-  val_alt: True
+  batch_size_val: 12
+  # batch_size_alt: 1
+  # fraction_alt: .2
+  # val_alt: True
   print_every: 25
   visualize_every: 1000
   checkpoint_every: 500
-  validate_every: 800
+  validate_every: 500
   backup_every: 1000
   model_selection_metric: act_plan_loss
   model_selection_mode: minimize
