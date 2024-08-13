@@ -6,6 +6,7 @@ convert data to index map:image data
 
 get the mesh
 convert to occ np array
+use trimesh
 
 do the camera data transform to global coords
 
@@ -125,7 +126,7 @@ def generate_input_vector(cam):
 
 
 class ManiSkillDataset(Dataset):
-    def __init__(self, dataset_file: str, indices: list) -> None:
+    def __init__(self, dataset_file: str, indices: list = None) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
         json_path = dataset_file.replace(".h5", ".json")
@@ -134,13 +135,16 @@ class ManiSkillDataset(Dataset):
         self.env_info = self.json_data["env_info"]
         self.env_id = self.env_info["env_id"]
         self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices
+        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
     
     def __len__(self):
-        raise(NotImplementedError)
+        return len(self.owned_indices)
     
     def __getitem__(self, idx):
-        raise(NotImplementedError)
+        eps = self.episodes[self.owned_indices[idx]]
+        trajectory = self.data[f"traj_{eps['episode_id']}"]
+        trajectory = load_h5_data(trajectory)
+        return trajectory
 
 
 class ManiSkillConvONetDataSet(ManiSkillDataset):
@@ -274,7 +278,7 @@ class ManiSkillConvONetDataset_V2(ManiSkillDataset):
 def get_MS_loaders(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
-        val_split: float = cfg_data.get("val_split", 0.1)
+        val_split: float = cfg_data.get("val_split", 0.5)
         preshuffle: bool = cfg_data.get("preshuffle", True)
         count = cfg_data.get("max_count", None) # Dataset count limitations
 

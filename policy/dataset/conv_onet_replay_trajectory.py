@@ -35,7 +35,7 @@ def gen_scene_mesh(env, num_points: int = int(1e5), exclude_robot = False) -> np
         """
 
         meshes = []
-        articulations = env.scene.get_all_articulations()
+        articulations = env._scene.get_all_articulations()
         if env.agent is not None and exclude_robot:
             articulations.pop(articulations.index(env.agent.robot))
         for articulation in articulations:
@@ -43,7 +43,7 @@ def gen_scene_mesh(env, num_points: int = int(1e5), exclude_robot = False) -> np
             if articulation_mesh:
                 meshes.append(articulation_mesh)
 
-        for actor in env.scene.get_all_actors():
+        for actor in env._scene.get_all_actors():
             actor_mesh = merge_meshes(get_actor_meshes(actor))
             if actor_mesh:
                 meshes.append(
@@ -54,7 +54,6 @@ def gen_scene_mesh(env, num_points: int = int(1e5), exclude_robot = False) -> np
 
         scene_mesh = merge_meshes(meshes)
         scene_pcd = scene_mesh.sample(num_points)
-        print(scene_mesh)
         return scene_mesh
 
 
@@ -275,8 +274,7 @@ def from_pd_joint_delta_pos(
     env: BaseEnv,
     render=False,
     pbar=None,
-    verbose=False,
-    get_gt=False
+    verbose=False
 ):
     n = len(ori_actions)
     if pbar is not None:
@@ -393,8 +391,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     target_control_mode = args.target_control_mode
     cam_res = args.cam_res
     add_seg = args.add_seg
-
     env_kwargs = ori_env_kwargs.copy()
+
     if target_obs_mode is not None:
         env_kwargs["obs_mode"] = target_obs_mode
     if target_control_mode is not None:
@@ -405,6 +403,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     if cam_res is not None:
         env_kwargs["camera_cfgs"]["width"]=cam_res
         env_kwargs["camera_cfgs"]["height"]=cam_res
+    
     if add_seg is not None:
         env_kwargs["camera_cfgs"]["add_segmentation"]=True
     
@@ -498,6 +497,11 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     if pbar is not None:
                         pbar.update()
                     _, _, _, _, info = env.step(a)
+                    
+                    if args.get_gt:
+                        meshes = gen_scene_mesh(env)
+                        print(meshes)
+
                     if args.vis:
                         env.render_human()
                     if args.use_env_states:
@@ -514,7 +518,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     pbar=pbar,
                     verbose=args.verbose,
                 )
-                
 
             # From joint delta position to others
             elif ori_control_mode == "pd_joint_delta_pos":
@@ -525,11 +528,8 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     env,
                     render=args.vis,
                     pbar=pbar,
-                    verbose=args.verbose,
-                    get_gt=args.get_gt
+                    verbose=args.verbose
                 )
-                # info["ground_truth"] = gen_scene_mesh(env)
-                # print("ran")
 
             success = info.get("success", False)
             if args.discard_timeout:
