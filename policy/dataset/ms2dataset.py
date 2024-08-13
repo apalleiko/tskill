@@ -264,8 +264,10 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
 
         # Create autoregressive masks for skill planner
         if self.method == "plan":
-            plan_tgt_mask = get_plan_ar_masks(self.max_num_skills)
+            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(16*num_cam, self.max_num_skills)
             data["plan_tgt_mask"] = plan_tgt_mask
+            data["plan_src_mask"] = plan_src_mask
+            data["plan_mem_mask"] = plan_mem_mask
 
         # Add extra dimension for batch size as model expects this.
         if self.add_batch_dim:
@@ -325,12 +327,39 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     return dec_mask, mem_mask, tgt_mask
 
 
-def get_plan_ar_masks(max_num_skills):
+def get_plan_ar_masks(num_img_feats, max_num_skills):
     """
     The masks for this information will be causal for the skills
     """
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
-    return tgt_mask
+    # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
+    # Only pass in the relevant timestep info (at the beginning of each skill)
+    plan_src_len = max_num_skills * (1 + 2*num_img_feats) # (MNS*(q + img_feats + goal))
+    mem_mask = torch.ones(max_num_skills, plan_src_len).to(torch.bool) # Start with everything masked
+    src_mask = torch.ones(plan_src_len, plan_src_len).to(torch.bool) # Start with everything masked
+    
+    for s in range(max_num_skills):
+        im_start = max_num_skills + s*num_img_feats
+        im_end = im_start + num_img_feats
+        goal_start = max_num_skills*(1 + num_img_feats) + s*num_img_feats
+        goal_end = goal_start + num_img_feats
+
+        # Src mask
+        src_mask[s,s] = False # Unmask qpos self attention
+        src_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
+        src_mask[goal_start:goal_end,im_start:im_end] = False # Unmask goal attention to img features
+        src_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+        src_mask[im_start:im_end,goal_start:goal_end] = False # Unmask img features attention to goal
+        src_mask[s,goal_start:goal_end] = False # Unmask qpos attention to goal
+        src_mask[goal_start:goal_end,s] = False # Unmask goal attention to qpos
+        src_mask[goal_start:goal_end,goal_start:goal_end] = False # Unmask goal self attention blocks
+        # Memory mask
+        mem_mask[s,im_start:im_end] = False # Unmask skill attention to img features
+        mem_mask[s,goal_start:goal_end] = False # Unmask skill attention to goal
+        mem_mask[s,s] = False # Unmask skill attention to qpos
+
+    return src_mask, mem_mask, tgt_mask
 
 
 def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len):

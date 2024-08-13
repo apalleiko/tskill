@@ -52,7 +52,9 @@ class SimLoss():
             vae = model
 
         if alt := self.cfg["training"].get("val_alt",False):
-            vae.conditional_decode = True
+            # vae.conditional_decode = True
+            print("Val Alt")
+            model.conditional_plan = True
 
         MSL = model.max_skill_len
         pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
@@ -167,7 +169,28 @@ class SimLoss():
 
                 # Get current skill
                 if method == "plan":
-                    if t == 0:
+                    if model.conditional_plan and t % model.max_skill_len == 0:
+                        if t==0:
+                            t_plan = 0
+                            z_tgt = z_tgt0
+
+                        current_data = dict(state=qpos, actions=None, 
+                                            img_feat=img_src[0:1,...], img_pe=img_pe[0:1,...],
+                                            z_tgt=z_tgt)
+                        
+                        # Check for precalc features
+                        if "goal_feat" in data.keys():
+                            current_data["goal_feat"] = data["goal_feat"]
+                            current_data["goal_pe"] = data["goal_pe"]
+                        else:
+                            current_data["goal"] = data["goal"]
+                        
+                        # Get current z pred
+                        current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[0])
+                        out = model(current_data, use_precalc=True)
+                        z_hat = out["z_hat"].permute(1,0,2)
+                        z_tgt = torch.vstack((z_tgt, z_hat[-1:,...]))
+                    elif t == 0:
                         z_tgt = z_tgt0
                         current_data = dict(state=qpos, actions=None, 
                                             img_feat=img_src[0:1,...], img_pe=img_pe[0:1,...],

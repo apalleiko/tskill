@@ -1,5 +1,5 @@
 method: plan
-notes: Continutation of 018.
+notes: Conditional planning run
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
   val_split: .2
@@ -23,24 +23,25 @@ model:
   dec_layers : 6
   pre_norm : False
   conditional_decode: False
+  conditional_plan: False # Alt
 
 loss:
   z_weight: 1
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/018
+  out_dir: out/PegInsertion/Plan/020
   train_vae: True
   max_it: 50000
   batch_size: 12
-  batch_size_val: 12
-  # batch_size_alt: 1
-  # fraction_alt: .2
-  # val_alt: True
+  batch_size_val: 2
+  batch_size_alt: 2
+  fraction_alt: 1
+  val_alt: True
   print_every: 25
-  visualize_every: 1000
-  checkpoint_every: 500
-  validate_every: 500
+  visualize_every: 2000
+  checkpoint_every: 2000
+  validate_every: 2000
   backup_every: 1000
   model_selection_metric: act_plan_loss
   model_selection_mode: minimize

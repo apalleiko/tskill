@@ -21,7 +21,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class TSkillPlan(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
-    def __init__(self, transformer, vae: TSkillCVAE,
+    def __init__(self, transformer, vae: TSkillCVAE, conditional_plan,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -32,6 +32,7 @@ class TSkillPlan(nn.Module):
         super().__init__()
         ### General args
         self.transformer = transformer
+        self.conditional_plan = conditional_plan
         self.hidden_dim = transformer.d_model
         self.vae = vae
         self.z_dim = self.vae.z_dim
@@ -93,10 +94,6 @@ class TSkillPlan(nn.Module):
         ### Get autoregressive masks, if applicable
         if self.vae.autoregressive_decode and is_training:
             if self.vae.conditional_decode: # Use full decoder mask from padded dataset
-                if 0 in data["dec_src_mask"].shape:
-                    with open("ERROR_DATA.pickle",'+wb') as f:
-                        pickle.dump(data, f)
-                    raise ValueError(f"zero size detected")
                 dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
                 dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
             else: # Only allow attention on one skill at a time
@@ -105,6 +102,8 @@ class TSkillPlan(nn.Module):
             dec_tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
         else:
             dec_tgt_mask = dec_src_mask = dec_mem_mask = None
+
+        bs, MNS = skill_pad_mask.shape
 
         ### Calculate image features or use precalculated from dataset
         use_precalc = kwargs.get("use_precalc",False)
@@ -119,8 +118,22 @@ class TSkillPlan(nn.Module):
             goal = data["goal"].to(self._device)
             goal_src, goal_pe = self.stt_encoder(goal)
 
+        # Conditional planning masks if applicable
+        if self.conditional_plan and is_training:
+            plan_src_mask = data["plan_src_mask"][0,...].to(self._device)
+            plan_mem_mask = data["plan_mem_mask"][0,...].to(self._device)
+            plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
+            qpos_plan = qpos[:,::self.max_skill_len,...] # (bs, 1|MNS, state_dim)
+            img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (1|MNS, bs, ...)
+            goal_info = (goal_src.repeat(MNS,1,1,1,1), goal_pe.repeat(MNS,1,1,1,1))
+        else:
+            plan_src_mask = plan_mem_mask = None
+            plan_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(MNS, device=self._device)
+            qpos_plan = qpos[:,:1,...] # (bs, 1, state_dim)
+            img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
+            goal_info = (goal_src, goal_pe)
+
         ### Autoregressively plan skills
-        bs, MNS = skill_pad_mask.shape
         sep_vae_grad = kwargs.get("sep_vae_grad",False)
         if is_training:
             vae_out = self.vae(data, use_precalc=use_precalc)
@@ -129,12 +142,11 @@ class TSkillPlan(nn.Module):
             if sep_vae_grad:
                 z_tgt = z_tgt.clone().detach() # Separate output z from grad calculations
             z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...]))
-            plan_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(z_tgt.shape[0], device=self._device)
-            z_hat = self.forward_plan((goal_src, goal_pe), 
-                                       qpos[:,:1,...], 
-                                       (img_src[:1,...], img_pe[:1,...]),
-                                       z_tgt, skill_pad_mask,
-                                       None, None, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+            z_hat = self.forward_plan(goal_info, 
+                                      qpos_plan, 
+                                      img_info_plan,
+                                      z_tgt, skill_pad_mask,
+                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
             
             ### Decode skills one at a time, possibly with conditional state & image info from current state
             if sep_vae_grad: # Turn off vae grad calculation for sequence decoding on pred z
@@ -175,37 +187,37 @@ class TSkillPlan(nn.Module):
         type_embed = type_embed.unsqueeze(1).repeat(1, bs, 1) # (3, bs, hidden_dim)
 
         # position
-        qpos_src = self.src_state_proj(qpos) # (bs, 1, hidden_dim)
-        qpos_src = self.src_state_norm(qpos_src).permute(1, 0, 2) # (1, bs, hidden_dim)
+        qpos_src = self.src_state_proj(qpos) # (bs, 1|MNS, hidden_dim)
+        qpos_src = self.src_state_norm(qpos_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
         qpos_src = qpos_src + type_embed[0, :, :] # add type 1 embedding
         qpos_pe = torch.zeros_like(qpos_src, device=self._device) # No pe for current qpos
 
         # image
-        img_src = self.image_proj(img_src) # (1, bs, num_cam, h*w, hidden)
+        img_src = self.image_proj(img_src) # (1|MNS, bs, num_cam, h*w, hidden)
         img_src = self.image_feat_norm(img_src)
         img_pe = img_pe * self.img_pe_scale_factor
-        img_src = img_src.flatten(2,3) # (1, bs, num_cam*h*w, hidden)
+        img_src = img_src.flatten(2,3) # (1|MNS, bs, num_cam*h*w, hidden)
         img_pe = img_pe.flatten(2,3)
-        img_src = img_src.permute(0, 2, 1, 3) # (1, h*num_cam*w, bs, hidden)
+        img_src = img_src.permute(0, 2, 1, 3) # (1|MNS, h*num_cam*w, bs, hidden)
         img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
-        img_src = img_src.flatten(0,1) # (num_cam*h*w, bs, hidden)
+        img_src = img_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
         img_pe = img_pe.flatten(0,1)
         img_src = img_src + type_embed[1, :, :] # add type 2 embedding
 
         # goal
-        goal_src = self.image_proj(goal_src) # (1, bs, num_cam, h*w, hidden)
+        goal_src = self.image_proj(goal_src) # (1|MNS, bs, num_cam, h*w, hidden)
         goal_src = self.image_feat_norm(goal_src)
         goal_pe = goal_pe * self.img_pe_scale_factor
-        goal_src = goal_src.flatten(2,3) # (1, bs, num_cam*h*w, hidden)
+        goal_src = goal_src.flatten(2,3) # (1|MNS, bs, num_cam*h*w, hidden)
         goal_pe = goal_pe.flatten(2,3)
-        goal_src = goal_src.permute(0, 2, 1, 3) # (1, h*num_cam*w, bs, hidden)
+        goal_src = goal_src.permute(0, 2, 1, 3) # (1|MNS, h*num_cam*w, bs, hidden)
         goal_pe = goal_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
-        goal_src = goal_src.flatten(0,1) # (num_cam*h*w, bs, hidden)
+        goal_src = goal_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
         goal_pe = goal_pe.flatten(0,1)
         goal_src = goal_src + type_embed[2, :, :] # add type 3 embedding
 
         # src
-        src = torch.cat([qpos_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats, bs, hidden_dim)
+        src = torch.cat([qpos_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats|*MNS, bs, hidden_dim)
         src_pe = torch.cat([qpos_pe, img_pe, goal_pe], axis=0) * self.src_pos_scale_factor
         # Add and norm
         src = src + src_pe

@@ -114,7 +114,7 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 8
+        cfg["training"]["batch_size"] = 2
         cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000

@@ -60,9 +60,12 @@ def get_model(cfg, device=None):
         print("Freezing CVAE network!")
         freeze_network(vae)
 
+    cond_plan = cfg_model.get("conditional_plan",False)
+
     model = TSkillPlan(
         transformer,
         vae,
+        cond_plan,
         device=device
     )
 
