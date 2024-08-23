@@ -150,12 +150,8 @@ class TSkillCVAE(nn.Module):
             enc_mem_mask = enc_tgt_mask = None
         # Decoder ar masks
         if self.autoregressive_decode:
-            if self.conditional_decode: # Use full decoder mask from padded dataset
-                dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
-                dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
-            else: # Only allow attention on one skill at a time
-                dec_src_mask = ~torch.diag(torch.ones(self.max_skill_len)).to(self._device, torch.bool)
-                dec_mem_mask = data["dec_mem_mask"][0,:,-self.max_skill_len:].to(self._device)
+            dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
+            dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
             dec_tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
         else:
             dec_tgt_mask = dec_src_mask = dec_mem_mask = None
@@ -294,7 +290,7 @@ class TSkillCVAE(nn.Module):
 
     def skill_decode(self, z, qpos, img_info,
                      src_pad_mask, tgt_pad_mask,
-                     src_mask=None, tgt_mask=None, mem_mask=None,
+                     src_mask=None, mem_mask=None, tgt_mask=None,
                      tgt=None):
         """
         Decode an individual skill into actions, possibly based on current 
@@ -305,8 +301,8 @@ class TSkillCVAE(nn.Module):
             img_info: (img_src, img_pe): (MSL|1, bs, num_cam, h*w, c & hidden)
             src_pad_mask: (bs, MSL|1)
             tgt_pad_mask: (bs, MSL|<)
-            src_mask: (bs, MSL*(2+num_features*num_cam), ")
-            mem_mask: (bs, MSL, MSL*(2+num_features*num_cam))
+            src_mask: (bs, MSL|<*(2+num_features*num_cam), ")
+            mem_mask: (bs, MSL|<, MSL|<*(2+num_features*num_cam))
             tgt_mask: (bs, MSL|<, MSL|<)
             tgt: (bs, MSL|<, act_dim)
         returns:
@@ -341,6 +337,19 @@ class TSkillCVAE(nn.Module):
         z_src = z_src + dec_type_embed[3, :, :] # add type 4 embedding
         z_pe = torch.zeros_like(z_src) # no pe, only one skill per decoding step
 
+        # tgt sequence
+        if self.autoregressive_decode:
+            dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
+            dec_tgt_pe = self.get_pos_table(tgt.shape[1]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
+            # Padded action outputs are not attended to by earlier actions and ignored in loss downstream.
+            tgt_pad_mask[:, :] = False
+        else:
+            dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL, 1, hidden_dim)
+            dec_tgt  = torch.zeros_like(dec_tgt_pe) # (MSL, bs, hidden_dim)
+        dec_tgt_pe = dec_tgt_pe.repeat(1, bs, 1)  # (MSL, bs, hidden_dim)
+        dec_tgt = dec_tgt + dec_tgt_pe
+        dec_tgt = self.dec_tgt_norm(dec_tgt)
+
         # Concatenate full decoder src
         if self.conditional_decode:
             # proprioception features
@@ -367,25 +376,15 @@ class TSkillCVAE(nn.Module):
         else:
             dec_src = z_src # (z, bs, hidden)
             dec_src_pe = z_pe
+            # only get skill sections of src and mem masks with no conditional decoding
+            n_tgt = dec_tgt.shape[0]
+            src_mask = src_mask[-n_tgt:, -n_tgt:]
+            mem_mask = mem_mask[:,-n_tgt:].to(self._device)
 
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)
 
-        # position encoding for output sequence
-        if self.autoregressive_decode:
-            dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            dec_tgt_pe = self.get_pos_table(tgt.shape[1]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
-            # In current AR scheme, each action can only attend to itself and conditional info from that timestep
-            # so keeping a pad mask leads to NaNs. Padded action outputs are ignored in loss downstream.
-            tgt_pad_mask[:, :] = False 
-        else:
-            dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL, 1, hidden_dim)
-            dec_tgt  = torch.zeros_like(dec_tgt_pe)
-        dec_tgt_pe = dec_tgt_pe.repeat(1, bs, 1)  # (MSL, bs, hidden_dim)
-        dec_tgt = dec_tgt + dec_tgt_pe
-        dec_tgt = self.dec_tgt_norm(dec_tgt)
-
-        # src padding mask should pad unused skills but not other inputs
+        # src padding mask should pad unused skills but not other inputs # TODO fix 
         src_pad_mask = torch.cat([torch.zeros(bs, dec_src.shape[0]-src_pad_mask.shape[1]).to(self._device),
                                   src_pad_mask], dim=1)
         
@@ -437,7 +436,7 @@ class TSkillCVAE(nn.Module):
         """
         bs = seq_pad_mask.shape[0]
         img_src, img_pe = img_info
-        ### Decode skills one at a time, possibly with conditional state & image info from current state
+        ### Decode skills one at a time
         a_hat = torch.zeros(0, bs, self.action_dim, device=self._device) # (0, bs, act_dim)
         for sk in range(z.shape[0]):
             # Get current time step and skill
@@ -450,7 +449,7 @@ class TSkillCVAE(nn.Module):
             # Get target actions for autoregressive decoding
             if self.autoregressive_decode:
                 # Always set first input as zeros, as "start" token, and shift other tgt actions right
-                tgt_0 = torch.zeros(bs, 1, self.action_dim, device=self._device)
+                tgt_0 = torch.zeros(bs, 1, self.action_dim, device=self._device) # (bs, 1, act_dim)
                 tgt = torch.cat((tgt_0, actions[:,t:tf-1,:]), dim=1) # (bs, MSL, act_dim)
                 # If decoding autoregressively, need to pass in all states and img_infos that will be encountered
                 qpos_t = qpos[:,t:tf,:] # (bs, MSL, state_dim)
@@ -461,13 +460,13 @@ class TSkillCVAE(nn.Module):
                 tgt = None
                 qpos_t = qpos[:,t:t+1,:] # (bs, 1, state_dim)
                 img_info_t = (img_src[t:t+1,...], img_pe[t:t+1,...]) # (1, bs, num_cam, h*w, c)
-                if (sk_unpad := sk_seq_pad_mask.shape[1]) < self.max_skill_len: # Handle case where input is < MSL
+                if (sk_unpad := sk_seq_pad_mask.shape[1]) < self.max_skill_len: # Handle case where input is < MSL during training
                     sk_seq_pad_mask = torch.hstack((sk_seq_pad_mask, torch.ones(bs, self.max_skill_len - sk_unpad)))
 
             # Decode current skill with conditional info
             a_pred = self.skill_decode(sk_z, qpos_t, img_info_t,
                                         sk_skill_pad_mask, sk_seq_pad_mask, 
-                                        dec_mask, tgt_mask, mem_mask,
+                                        dec_mask, mem_mask, tgt_mask,
                                         tgt) # (seq, bs, act_dim)
             
             a_hat = torch.vstack((a_hat, a_pred))

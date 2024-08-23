@@ -5,30 +5,27 @@ import torch
 from torch.nn import functional as F
 from tqdm import tqdm
 from policy.training import BaseTrainer
-from policy.skill.config import get_trainer
+from policy.state.config import get_trainer
 
-from .state_decode import TSkillPlan
+from .state_decode import StateDecoder
 
 
 class Trainer(BaseTrainer):
     def __init__(
         self,
         cfg,
-        model: TSkillPlan,
+        model,
         optimizer,
         device=None,
         scheduler=None
     ):
         self.epoch_it = 0
         self.step_it = 0
-        self.zero_grad = True
 
-        self.model = model
+        self.model: StateDecoder = model
         self.optimizer = optimizer
         self.device = device
         self.scheduler = scheduler
-
-        self.gradient_accumulation = cfg["training"].get("gradient_accumulation",1)
 
     def epoch_step(self):
         if self.scheduler is not None and self.epoch_it > 0:
@@ -37,11 +34,9 @@ class Trainer(BaseTrainer):
 
     def train_step(self, data):
         self.model.train()
-        if self.zero_grad:
-            self.optimizer.zero_grad()
-            self.zero_grad = False
+        self.optimizer.zero_grad()
+
         loss_dict, metric_dict = self.compute_loss(data)
-        metric_dict = {k: v for k, v in metric_dict.items()}
 
         loss = 0.0
         _dict = {}
@@ -49,14 +44,12 @@ class Trainer(BaseTrainer):
             loss += v
             _dict[k] = v.item()
         loss_dict = _dict
-
-        loss = loss / self.gradient_accumulation
         loss.backward()
-        if (self.step_it + 1) % self.gradient_accumulation == 0:
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
-            self.optimizer.step()
-            self.zero_grad = True
 
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
+        self.optimizer.step()
+
+        {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
         self.step_it += 1
 
         return loss_dict, metric_dict
@@ -83,56 +76,21 @@ class Trainer(BaseTrainer):
 
     def eval_step(self, data):
         with torch.no_grad():
-            loss_dict, metric_dict = self.compute_loss(data)
+            loss_dict, metric_dict = self.compute_loss(data, alt=self.val_alt)
         loss_dict = {k: v.item() for k, v in loss_dict.items()}
-        metric_dict = {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
+        metric_dict = {k: v.item() for k, v in metric_dict.items()}
         return loss_dict, metric_dict
 
-    def compute_loss(self, data):
+    def compute_loss(self, data, **kwargs):
         loss_dict = dict()
         metric_dict = dict()
-        a_targ = data["actions"].to(self.device) # (bs, seq, act_dim)
-        seq_pad_mask = data["seq_pad_mask"].to(self.device) # (bs, seq)
-        skill_pad_mask = data["skill_pad_mask"].to(self.device) # (bs, skill_seq)
-        bs, seq, act_dim = a_targ.shape
-        latent_dim = self.model.z_dim
-
-        # Correct mask size and convert to (0,1) where 1 is attended
-        action_loss_mask = seq_pad_mask.unsqueeze(-1).repeat(1, 1, act_dim)
-        action_loss_mask = torch.logical_not(action_loss_mask)
-        num_actions = torch.sum(action_loss_mask.to(torch.int16))
-
-        # Correct mask size and convert to (0,1) where 1 is attended
-        latent_loss_mask = skill_pad_mask.unsqueeze(-1).repeat(1, 1, latent_dim)
-        latent_loss_mask = torch.logical_not(latent_loss_mask)
-        num_latent = torch.sum(latent_loss_mask.to(torch.int16))
         
-        # Get model outputs
-        out = self.model(data, use_precalc=self.use_precalc)
-        a_hat = out["a_hat"]
-        z_hat = out["z_hat"]
-        z_targ = out["vae_out"]["mu"].to(self.device) # (bs, skill_seq, z_dim)
+        out = self.model(data)
 
-        # Set target and pred actions to 0 for padded sequence outputs
-        a_hat_l = a_hat[action_loss_mask]
-        a_targ_l = a_targ[action_loss_mask]
         loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-
-        # Set target and pred latents to 0 for padded skill outputs
-        z_hat_l = z_hat[latent_loss_mask]
-        z_targ_l = z_targ[latent_loss_mask]
         loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
 
-        metric_dict["ahat_vector_traj"] = a_hat
-
         for k,v in self.model.metrics.items():
-            metric_dict[k] = v
-
-        if self.train_vae:
-            vae_loss_dict, vae_metric_dict = self.vae_trainer.raw_loss(out["vae_out"], data)
-            for k,v in vae_loss_dict.items():
-                loss_dict[f"{k}"] = v
-            for k,v in vae_metric_dict.items():
-                metric_dict[f"{k}"] = v
+            metric_dict[k] = v.detach()
 
         return loss_dict, metric_dict

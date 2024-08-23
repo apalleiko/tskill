@@ -21,7 +21,8 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class TSkillPlan(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
-    def __init__(self, transformer, vae: TSkillCVAE, conditional_plan,
+    def __init__(self, transformer: torch.nn.Transformer, vae: TSkillCVAE, 
+                 conditional_plan, distance_metric,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -33,6 +34,7 @@ class TSkillPlan(nn.Module):
         ### General args
         self.transformer = transformer
         self.conditional_plan = conditional_plan
+        self.distance_metric = distance_metric
         self.hidden_dim = transformer.d_model
         self.vae = vae
         self.z_dim = self.vae.z_dim
@@ -68,6 +70,10 @@ class TSkillPlan(nn.Module):
         self.z_proj = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent
         self.tgt_z_proj = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
 
+        ### Distance metric
+        if self.distance_metric:
+            self.calc_distance = None #TODO
+
         # Other
         self.metrics = dict()
         self.to(self._device)
@@ -80,9 +86,11 @@ class TSkillPlan(nn.Module):
             goal: (bs, 1, num_cam, 3, h, w) | (bs, 1, num_cam, h*w, c & hidden)
             qpos: (bs, seq, state_dim)
             actions: (bs, seq, action_dim)
-            images: (bs, seq, num_cam, 3, h, w) | (bs, seq, num_cam, h*w, c & hidden)
+            rgb | (img_feat, img_pe): (bs, seq, num_cam, 3, h, w) | (bs, seq, num_cam, h*w, c & hidden)
             seq_pad_mask: Padding mask for input sequence (bs, seq)
             skill_pad_mask: Padding mask for skill sequence (bs, max_num_skills)
+            *autoregressive masks
+            *z_tgt: (bs, tgt_seq, z_dim)
         """
         qpos = data["state"].to(self._device)
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
@@ -90,6 +98,7 @@ class TSkillPlan(nn.Module):
         if is_training:
             seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
+        bs, MNS = skill_pad_mask.shape
 
         ### Get autoregressive masks, if applicable
         if self.vae.autoregressive_decode and is_training:
@@ -103,28 +112,32 @@ class TSkillPlan(nn.Module):
         else:
             dec_tgt_mask = dec_src_mask = dec_mem_mask = None
 
-        bs, MNS = skill_pad_mask.shape
-
-        ### Calculate image features or use precalculated from dataset
+        ### Image calculation or features
         use_precalc = kwargs.get("use_precalc",False)
         if use_precalc and all(x in data.keys() for x in ("img_feat","img_pe")):
             img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
             img_pe = data["img_pe"].transpose(0,1).to(self._device)
-            goal_src = data["goal_feat"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, c)
-            goal_pe = data["goal_pe"].transpose(0,1).to(self._device)
         else:
             images = data["rgb"].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
+
+        ### Goal image or features
+        if "goal_feat" in data.keys():
+            goal_src = data["goal_feat"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, c)
+            goal_pe = data["goal_pe"].transpose(0,1).to(self._device)
+        else:
             goal = data["goal"].to(self._device)
             goal_src, goal_pe = self.stt_encoder(goal)
 
-        # Conditional planning masks if applicable
-        if self.conditional_plan and is_training:
+        ### Get conditional planning masks if applicable
+        if self.conditional_plan:
             plan_src_mask = data["plan_src_mask"][0,...].to(self._device)
             plan_mem_mask = data["plan_mem_mask"][0,...].to(self._device)
             plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
-            qpos_plan = qpos[:,::self.max_skill_len,...] # (bs, 1|MNS, state_dim)
-            img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (1|MNS, bs, ...)
+            # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
+            if is_training:
+                qpos_plan = qpos[:,::self.max_skill_len,...] # (bs, MNS, state_dim)
+                img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
             goal_info = (goal_src.repeat(MNS,1,1,1,1), goal_pe.repeat(MNS,1,1,1,1))
         else:
             plan_src_mask = plan_mem_mask = None
@@ -134,13 +147,15 @@ class TSkillPlan(nn.Module):
             goal_info = (goal_src, goal_pe)
 
         ### Autoregressively plan skills
-        sep_vae_grad = kwargs.get("sep_vae_grad",False)
         if is_training:
+            # Whether to seperate planning of skills and actions from reconstruction in computation graph
+            sep_vae_grad = kwargs.get("sep_vae_grad",False)
+            # Get target skills from vae
             vae_out = self.vae(data, use_precalc=use_precalc)
             z_tgt0 = torch.zeros(1,bs,self.z_dim, device=self._device)
             z_tgt = vae_out["mu"].permute(1,0,2) # (skill_seq, bs, z_dim)
-            if sep_vae_grad:
-                z_tgt = z_tgt.clone().detach() # Separate output z from grad calculations
+            if sep_vae_grad: # Turn off vae grad calculation for planning z
+                z_tgt = z_tgt.clone().detach()
             z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...]))
             z_hat = self.forward_plan(goal_info, 
                                       qpos_plan, 
@@ -148,25 +163,23 @@ class TSkillPlan(nn.Module):
                                       z_tgt, skill_pad_mask,
                                       plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
             
-            ### Decode skills one at a time, possibly with conditional state & image info from current state
+            ### Decode skills
             if sep_vae_grad: # Turn off vae grad calculation for sequence decoding on pred z
                 self.vae.requires_grad_(False)
             a_hat = self.vae.sequence_decode(z_hat, qpos, actions, (img_src, img_pe),
-                                            seq_pad_mask, skill_pad_mask,
-                                            dec_src_mask, dec_mem_mask, dec_tgt_mask)
+                                             seq_pad_mask, skill_pad_mask,
+                                             dec_src_mask, dec_mem_mask, dec_tgt_mask)
             if sep_vae_grad:
                 self.vae.requires_grad_(True)
             a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         else:
-            z_tgt = data["z_tgt"] # (tgt_seq, bs, z_dim)
-            plan_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(z_tgt.shape[0], device=self._device)
-            plan_skill_pad_mask = torch.zeros(z_tgt.shape[1], z_tgt.shape[0], device=self._device)
-            z_hat = self.forward_plan((goal_src, goal_pe),
-                                    qpos[:,:1,...],
-                                    (img_src[:1,...], img_pe[:1,...]),
-                                    z_tgt, plan_skill_pad_mask,
-                                    None, None, plan_tgt_mask) # (skill_seq, bs, latent_dim)
-        
+            z_tgt = data["z_tgt"].permute(1,0,2) # (tgt_seq, bs, z_dim)
+            z_hat = self.forward_plan(goal_info,
+                                      qpos,
+                                      (img_src, img_pe),
+                                      z_tgt, skill_pad_mask,
+                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+
             a_hat = vae_out = None
 
         z_hat = z_hat.permute(1,0,2) # (bs, skill_seq, latent_dim)
@@ -177,7 +190,18 @@ class TSkillPlan(nn.Module):
     def forward_plan(self, goal_info, qpos, img_info, 
                      tgt, tgt_pad_mask, 
                      src_mask=None, mem_mask=None, tgt_mask=None):
-        """Plan skill sequence based on current robot state and image input with goal state"""
+        """Plan skill sequence based on current robot state and image input with goal state
+        args:
+            - goal_info: tuple of
+                - goal_src: (1 | MNS|<, bs, num_cam, h*w, c)
+                - goal_pe: (1 | MNS|<, bs, num_cam, h*w, hidden)
+            - qpos: state information (bs, 1 | MNS|<, state_dim)
+            - img_info: tuple of
+                - img_src: (1 | MNS|<, bs, num_cam, h*w, c)
+                - img_pe (1 | MNS|<, bs, num_cam, h*w, hidden)
+            - tgt: skill sequence (MNS|<, bs, z_dim)
+            - tgt_pad_mask: square subsequent mask (MNS|<, MNS|<)
+        """
         bs, _, _ = qpos.shape # Use bs for masking
         img_src, img_pe = img_info # (1, bs, num_cam, h*w, c&hidden)
         goal_src, goal_pe = goal_info # (1, bs, num_cam, h*w, c&hidden)

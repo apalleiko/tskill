@@ -41,7 +41,7 @@ def get_model(cfg, device=None):
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
 
-    cond_dec = cfg_model.get("conditional_decode",True)
+    cond_dec = cfg_model.get("conditional_decode",False)
     ar_dec = cfg_model.get("autoregressive_decode",False)
     encode_state = cfg_model.get("encode_state",True)
     encoder_is_causal = cfg_model.get("encoder_is_causal",False)

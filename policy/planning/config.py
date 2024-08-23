@@ -61,11 +61,13 @@ def get_model(cfg, device=None):
         freeze_network(vae)
 
     cond_plan = cfg_model.get("conditional_plan",False)
+    dist_metric = cfg_model.get("distance_metric",False)
 
     model = TSkillPlan(
         transformer,
         vae,
         cond_plan,
+        dist_metric,
         device=device
     )
 

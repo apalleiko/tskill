@@ -114,7 +114,8 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 2
+        cfg["training"]["batch_size"] = 24
+        cfg["training"]["batch_size_alt"] = 6
         cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
@@ -275,10 +276,12 @@ def main(args):
                 t_eta = (t_elapsed * (max_it / trainer.step_it)) - t_elapsed
                 t_eta = datetime.timedelta(seconds=t_eta)
                 t_eta = str(t_eta).split(".")[0]
-
+                t_elapsed = datetime.timedelta(seconds=t_elapsed)
+                t_elapsed = str(t_eta).split(".")[0]
                 print_str = (
-                    f"[Epoch {epoch_it:04d}] it={it:04d}, time: {t_elapsed:.3f}, "
+                    f"[Epoch {epoch_it:04d}] it={it:04d}, "
                 )
+                print_str += f"time: {t_elapsed}, "
                 print_str += f"eta: {t_eta}, "
 
                 for k, v in losses.items():
@@ -305,33 +308,6 @@ def main(args):
                     loss_val_best=metric_val_best,
                 )
 
-            # Run validation
-            if validate_every > 0 and (it % validate_every) == 0:
-                sim_eval = sim_loss.sim_acts(model)
-                eval_dict, eval_metric_dict = trainer.evaluate(val_loader)
-                metric_val = eval_dict[model_selection_metric]
-                print(
-                    "Validation metric (%s): %.4f"
-                    % (model_selection_metric, metric_val)
-                )
-
-                metrics = {f"val/{k}": v for k, v in eval_dict.items()}
-                metrics.update({f"val/metrics/{k}": v for k, v in eval_metric_dict.items()})
-
-                metrics.update({"val/sim_act_loss": sim_eval["sim_act_loss"]})
-
-                wandb.log(metrics)
-
-                if model_selection_sign * (metric_val - metric_val_best) > 0:
-                    metric_val_best = metric_val
-                    print("New best model (loss %.4f)" % metric_val_best)
-                    checkpoint_io.save(
-                        "model_best.pt",
-                        epoch_it=epoch_it,
-                        it=it,
-                        loss_val_best=metric_val_best,
-                    )
-
             # Plot gradient histograms
             if visualize_every > 0 and ((it % visualize_every) == 0 or it == 1):
                 acts = batch["actions"]
@@ -357,6 +333,33 @@ def main(args):
                     elif "vector" in k:
                         writer.add_histogram(f'{k}', v, it)
                 writer.close()
+
+            # Run validation
+            if validate_every > 0 and (it % validate_every) == 0:
+                # sim_eval = sim_loss.sim_acts(model)
+                eval_dict, eval_metric_dict = trainer.evaluate(val_loader)
+                metric_val = eval_dict[model_selection_metric]
+                print(
+                    "Validation metric (%s): %.4f"
+                    % (model_selection_metric, metric_val)
+                )
+
+                metrics = {f"val/{k}": v for k, v in eval_dict.items()}
+                metrics.update({f"val/metrics/{k}": v for k, v in eval_metric_dict.items()})
+                # metrics.update({"val/sim_act_loss": sim_eval["sim_act_loss"]})
+                metrics.update({"it": it})
+
+                wandb.log(metrics)
+
+                if model_selection_sign * (metric_val - metric_val_best) > 0:
+                    metric_val_best = metric_val
+                    print("New best model (loss %.4f)" % metric_val_best)
+                    checkpoint_io.save(
+                        "model_best.pt",
+                        epoch_it=epoch_it,
+                        it=it,
+                        loss_val_best=metric_val_best,
+                    )
 
             # Exit if necessary
             if trainer.step_it >= max_it:

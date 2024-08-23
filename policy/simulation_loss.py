@@ -27,7 +27,7 @@ from mani_skill2.utils.wrappers import RecordEpisode
 from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
-from policy.dataset.ms2dataset import convert_observation, rescale_rgbd
+from policy.dataset.ms2dataset import convert_observation, get_plan_ar_masks, rescale_rgbd
 from policy.skill.skill_vae import TSkillCVAE
 from policy.planning.skill_plan import TSkillPlan
 
@@ -36,6 +36,7 @@ class SimLoss():
     def __init__(self, cfg, dataset) -> None:
         self.cfg = cfg
         self.dataset = dataset
+        self.vis = True
 
     def sim_acts(self, model:TSkillPlan):
         """Returns model outputs from simulation in it's environment
@@ -45,6 +46,7 @@ class SimLoss():
             - acts: simulated output actions from the dataset
         """
 
+        model.eval()
         method = self.cfg["method"]
         if method == "plan":
             vae: TSkillCVAE = model.vae
@@ -135,7 +137,8 @@ class SimLoss():
             seed = reset_kwargs.pop("seed")
 
             env.reset(seed=seed, options=reset_kwargs)
-            env.render_human()
+            if self.vis:
+                env.render_human()
         
             if method == "plan":
                 vae = model.vae
@@ -144,9 +147,12 @@ class SimLoss():
 
             info = {}
             img_obs = []
+
+            # Take a zero step to get initial observations
+            obs, _, _, _, info = env.step(np.zeros(vae.action_dim))
+            t_plan = 0
             ori_env_state = ori_h5_file[traj_id]["env_states"][1]
             env.set_state(ori_env_state)
-            obs, _, _, _, info = env.step(np.zeros(vae.action_dim))
 
             if pbar is not None:
                 pbar.reset(total=max_episode_steps)
@@ -154,109 +160,139 @@ class SimLoss():
                 if pbar is not None:
                     pbar.update()
                 
-                # Obtain data in the proper form
+                # Current skill based on time since replanning
+                t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
+                
+                # Obtain observation data in the proper form
                 o = convert_observation(obs, robot_state_only=True, pos_only=False)
-                qpos = torch.from_numpy(o["state"]).float().unsqueeze(0).unsqueeze(0).to(model._device)
+                # State
+                state = self.dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
+                # Image
                 rgbd = o["rgbd"]
                 rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
                 img_obs.append(np.hstack((np.vstack((rgb[...,0],rgb[...,1])),
-                                        np.vstack((rgb[...,2],rgb[...,3])))) * 255)
-                rgb = torch.from_numpy(rgb).float().unsqueeze(0).permute((0, 4, 3, 1, 2)).unsqueeze(0) # (bs, seq, num_cams, channels, img_h, img_w)
-                img_src, img_pe = model.stt_encoder(rgb.to(model._device))
+                                            np.vstack((rgb[...,2],rgb[...,3])))) * 255)
+                rgb = torch.from_numpy(rgb).float().permute((3, 2, 0, 1)).unsqueeze(0).unsqueeze(0).to(model._device) # (bs, seq, num_cams, channels, img_h, img_w)
+                img_src, img_pe = model.stt_encoder(rgb) # (seq, bs, num_cam, h*w, c|hidden)
                 
-                z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device)
+                z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device) # (bs, skill_seq, z_dim)
                 dec_skill_pad_mask = torch.zeros(1,1)
+                current_data = dict()
+                
+                # Check for precalc features
+                if "goal_feat" in data.keys():
+                    current_data["goal_feat"] = data["goal_feat"]
+                    current_data["goal_pe"] = data["goal_pe"]
+                else:
+                    current_data["goal"] = data["goal"]
 
                 # Get current skill
                 if method == "plan":
-                    if model.conditional_plan and t % model.max_skill_len == 0:
+                    pbar.set_postfix(
+                        {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                    if model.conditional_plan and (t_plan % model.max_skill_len == 0):
                         if t==0:
                             t_plan = 0
+                            t_sk = 0
                             z_tgt = z_tgt0
+                            img_srcs = img_src
+                            img_pes = img_pe
+                            states = state
+                        else:
+                            img_srcs = torch.cat((img_srcs, img_src), dim=0)
+                            img_pes = torch.cat((img_pes, img_pe), dim=0)
+                            states = torch.cat((states, state), dim=1)
 
-                        current_data = dict(state=qpos, actions=None, 
-                                            img_feat=img_src[0:1,...], img_pe=img_pe[0:1,...],
-                                            z_tgt=z_tgt)
-                        
-                        # Check for precalc features
-                        if "goal_feat" in data.keys():
-                            current_data["goal_feat"] = data["goal_feat"]
-                            current_data["goal_pe"] = data["goal_pe"]
-                        else:
-                            current_data["goal"] = data["goal"]
-                        
+                        # Have to trasnpose feat/pe since bs is expected to be first dim
+                        current_data["actions"] = None
+                        current_data["img_feat"] = img_srcs.transpose(0,1)
+                        current_data["img_pe"] = img_pes.transpose(0,1)
+                        current_data["state"] = states
+                        current_data["z_tgt"] = z_tgt
+                        current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[1])
+                    
+                        _,_,num_cam,num_feats,_ = img_src.shape
+                        plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, z_tgt.shape[1])
+                        current_data["plan_tgt_mask"] = plan_tgt_mask.unsqueeze(0)
+                        current_data["plan_src_mask"] = plan_src_mask.unsqueeze(0)
+                        current_data["plan_mem_mask"] = plan_mem_mask.unsqueeze(0)
+
                         # Get current z pred
-                        current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[0])
-                        out = model(current_data, use_precalc=True)
-                        z_hat = out["z_hat"].permute(1,0,2)
-                        z_tgt = torch.vstack((z_tgt, z_hat[-1:,...]))
-                    elif t == 0:
-                        z_tgt = z_tgt0
-                        current_data = dict(state=qpos, actions=None, 
-                                            img_feat=img_src[0:1,...], img_pe=img_pe[0:1,...],
-                                            z_tgt=z_tgt0)
-                        
-                        # Check for precalc features
-                        if "goal_feat" in data.keys():
-                            current_data["goal_feat"] = data["goal_feat"]
-                            current_data["goal_pe"] = data["goal_pe"]
-                        else:
-                            current_data["goal"] = data["goal"]
-                        
-                        # Get current z pred
-                        MNS = np.ceil((max_episode_steps-t) / MSL).astype(np.int16)
-                        current_data["skill_pad_mask"] = torch.zeros(1,MNS)
-                        for s in range(MNS):
+                        with torch.no_grad():
                             out = model(current_data, use_precalc=True)
-                            z_hat = out["z_hat"].permute(1,0,2)
-                            z_tgt = torch.vstack((z_tgt, z_hat[-1:,...]))
-                            current_data["z_tgt"] = z_tgt
-                        # Keep track of number of time steps since last replanned
+                        z_hat = out["z_hat"]
+                        z_tgt = torch.cat((z_tgt, z_hat[:,-1:,:]), dim=1)
+                        
+                    elif not model.conditional_plan:
                         t_plan = 0
-                    else:
-                        t_plan += 1
-                    t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
-                    latent = z_hat[t_sk:t_sk+1,...]
-                else: # Preplanned by vae
+                        t_sk = 0
+                        z_tgt = z_tgt0
+
+                        current_data["img_feat"] = img_src
+                        current_data["img_pe"] = img_pe
+                        current_data["state"] = state
+                        # current_data["state"] = data["state"][:,:t+1:MSL,:]
+                        current_data["actions"] = None
+                        
+                        MNS = np.ceil((max_episode_steps-t) / MSL).astype(np.int16)
+                        current_data["z_tgt"] = z_tgt
+                        
+                        # Get current z pred
+                        for s in range(MNS):
+                            current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[1])
+                            with torch.no_grad():
+                                out = model(current_data, use_precalc=True)
+                            z_hat = out["z_hat"]
+                            z_tgt = torch.cat((z_tgt, z_hat[:,-1:,:]), dim=1)
+                            current_data["z_tgt"] = z_tgt
+                    
+                    latent = z_hat[:,t_sk:t_sk+1,:].permute(1,0,2)
+
+                else: # Preplanned
+                    pbar.set_postfix(
+                        {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
                     t_plan = t
-                    t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
                     latent = out["latent"] if method != "plan" else out["vae_out"]["latent"]
                     latent = latent[t_sk:t_sk+1,...]
 
                 if latent.shape[0] == 0:
+                    print("BREAKING")
                     break
                 
                 # Decode latent into actions
                 if vae.autoregressive_decode:
                     if t_plan % MSL == 0: # Decode new sequence
                         tgt = torch.zeros(1,1,vae.action_dim, device=model._device)
-                    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
-                    tgt_mask = ~(torch.eye(tgt.shape[1]).to(torch.bool))
+                    # tgt_mask = ~(torch.eye(tgt.shape[1]).to(torch.bool))
+                    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(tgt.shape[1])
                     seq_pad_mask = torch.zeros(1,tgt.shape[1])
                     with torch.no_grad():
-                        a_hat = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 
+                        a_pred = vae.skill_decode(latent, state, (img_src,img_pe),
                                                     dec_skill_pad_mask, seq_pad_mask,
                                                     tgt_mask=tgt_mask, tgt=tgt) # (MSL|<, bs, action_dim)
-                    a_hats = torch.vstack((a_hats, a_hat[-1:,...]))
-                    tgt = torch.cat((tgt, a_hat[-1:,...].permute(1,0,2)), dim=1) # (1, seq + 1, act_dim)
-                    a_hat = a_hat.detach().cpu()[0,-1:,...] # Take most recent action
+                    tgt = torch.cat((tgt, a_pred.permute(1,0,2)[:,-1:,...]), dim=1) # (1, seq + 1, act_dim)
+                    a_hats = torch.vstack((a_hats, a_pred[-1:,...]))
+                    a_hat = a_pred.detach().cpu()[:,-1,...] # Take most recent action
                     a_hat = self.dataset.action_scaling(a_hat, "inverse").numpy()
                     a_t = a_hat[0,:]
-                elif by_skill and (t_plan % MSL != 0):
-                    a_t = a_hat[t_plan % MSL,:]
+                elif by_skill and (t % MSL != 0):
+                    a_t = a_hat[t % MSL,:]
                 else:
                     seq_pad_mask = torch.zeros(1,MSL)
                     with torch.no_grad():
-                        a_hat = vae.skill_decode(latent, qpos, (img_src[0:1,...],img_pe[0:1,...]), 
-                                                dec_skill_pad_mask, seq_pad_mask, None, None)
-                    a_hats = torch.vstack((a_hats, a_hat[-1:,...]))
+                        a_hat = vae.skill_decode(latent, state, (img_src,img_pe), 
+                                                    dec_skill_pad_mask, seq_pad_mask, 
+                                                    None, None) # (MSL|<, bs, action_dim)
+                    a_hats = torch.vstack((a_hats, a_hat))
                     a_hat = a_hat.detach().cpu().squeeze(1)
                     a_hat = self.dataset.action_scaling(a_hat, "inverse").numpy()
                     a_t = a_hat[0,:]
-                
-                obs, _, _, _, info = env.step(a_t)
 
-                env.render_human()
+                obs, _, _, _, info = env.step(a_t)
+                t_plan += 1
+
+                if self.vis:
+                    env.render_human()
 
             success = info.get("success", False)
             a_hats = a_hats.permute(1,0,2) # (bs, seq, act_dim)

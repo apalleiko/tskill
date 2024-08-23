@@ -188,12 +188,14 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
             img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
             num_cam = img_feat.shape[1]
+            num_feats = img_feat.shape[2]
         else:
             use_precalc = False
             rgbd = obs["rgbd"][:-1]
             rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
             num_cam = rgb.shape[1]
+            num_feats = 16 # HARDCODED
 
         if self.method == "plan":
             if use_precalc:
@@ -246,7 +248,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
 
         # Generate autoregressive masks for vae decoder if applicable
         if self.generate_dec_ar_masks:
-            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(16*num_cam, self.max_skill_len)
+            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, self.max_skill_len)
             data["dec_src_mask"] = dec_src_mask
             data["dec_mem_mask"] = dec_mem_mask
             data["dec_tgt_mask"] = dec_tgt_mask
@@ -264,7 +266,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
 
         # Create autoregressive masks for skill planner
         if self.method == "plan":
-            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(16*num_cam, self.max_num_skills)
+            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, self.max_num_skills)
             data["plan_tgt_mask"] = plan_tgt_mask
             data["plan_src_mask"] = plan_src_mask
             data["plan_mem_mask"] = plan_mem_mask
@@ -299,33 +301,67 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     for the specific order that is used in the SkillVAE model
     """
     dec_src_len = max_skill_len * (2 + num_img_feats) # (MSL*(q + img_feats + z))
-    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
-    tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    # tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
     mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
-    dec_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
+    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
     
     sa_mask = ~torch.diag(torch.ones(max_skill_len)).to(torch.bool) # Self attention mask
-    dec_mask[:max_skill_len,:max_skill_len] =  sa_mask # Unmask qpos self attention
-    dec_mask[-max_skill_len:,-max_skill_len:] = sa_mask # Unmask z self attention
+    src_mask[:max_skill_len,:max_skill_len] =  sa_mask # Unmask qpos self attention
+    src_mask[-max_skill_len:,-max_skill_len:] = sa_mask # Unmask z self attention
     for s in range(max_skill_len):
         im_start = max_skill_len + s*num_img_feats
         im_end = im_start + num_img_feats
         zs = -max_skill_len + s
         # Decoder mask
-        dec_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
-        dec_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
-        dec_mask[zs,im_start:im_end] = False # Unmask z attention to img features
-        dec_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
-        dec_mask[im_start:im_end,zs] = False # Unmask img features attention to z
-        dec_mask[s,zs] = False # Unmask qpos attention to z
-        dec_mask[zs,s] = False # Unmask z attention to qpos
+        src_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
+        src_mask[zs,im_start:im_end] = False # Unmask z attention to img features
+        src_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+        src_mask[im_start:im_end,zs] = False # Unmask img features attention to z
+        src_mask[s,zs] = False # Unmask qpos attention to z
+        src_mask[zs,s] = False # Unmask z attention to qpos
         # Memory mask, leave column 0 all True to mask attention to start token 
         mem_mask[s,im_start:im_end] = False # Unmask action attention to img features
         mem_mask[s,zs] = False # Unmask action attention to z
         mem_mask[s,s] = False # Unmask action attention to qpos
 
-    return dec_mask, mem_mask, tgt_mask
+    return src_mask, mem_mask, tgt_mask
 
+
+# def get_plan_ar_masks(num_img_feats, max_num_skills):
+#     """
+#     The masks for this information will be causal for the skills
+#     """
+#     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+#     # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
+#     # Only pass in the relevant timestep info (at the beginning of each skill)
+#     plan_src_len = max_num_skills * (1 + 2*num_img_feats) # (MNS*(q + img_feats + goal))
+#     mem_mask = torch.ones(max_num_skills, plan_src_len).to(torch.bool) # Start with everything masked
+#     src_mask = torch.ones(plan_src_len, plan_src_len).to(torch.bool) # Start with everything masked
+    
+#     for s in range(max_num_skills):
+#         im_start = max_num_skills + s*num_img_feats
+#         im_end = im_start + num_img_feats
+#         goal_start = max_num_skills*(1 + num_img_feats) + s*num_img_feats
+#         goal_end = goal_start + num_img_feats
+
+#         # Src mask
+#         src_mask[s,s] = False # Unmask qpos self attention
+#         src_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
+#         src_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
+#         src_mask[goal_start:goal_end,im_start:im_end] = False # Unmask goal attention to img features
+#         src_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+#         src_mask[im_start:im_end,goal_start:goal_end] = False # Unmask img features attention to goal
+#         src_mask[s,goal_start:goal_end] = False # Unmask qpos attention to goal
+#         src_mask[goal_start:goal_end,s] = False # Unmask goal attention to qpos
+#         src_mask[goal_start:goal_end,goal_start:goal_end] = False # Unmask goal self attention blocks
+#         # Memory mask
+#         mem_mask[s,im_start:im_end] = False # Unmask skill attention to img features
+#         mem_mask[s,goal_start:goal_end] = False # Unmask skill attention to goal
+#         mem_mask[s,s] = False # Unmask skill attention to qpos
+
+#     return src_mask, mem_mask, tgt_mask
 
 def get_plan_ar_masks(num_img_feats, max_num_skills):
     """
@@ -404,6 +440,8 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         recompute_fullseq = False # Whether recomputing full sequence data map is needed
         save_override = kwargs.get("save_override", False)
         fullseq_override = kwargs.get("fullseq_override", False)
+        recalc_override = kwargs.get("recalc_override", False)
+        # recalc_override = True
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
@@ -422,15 +460,15 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
 
         # Try loading existing train/val split indices
         override_indices = kwargs.get("indices", None)
-        if override_indices is not None:
+        if not recalc_override and override_indices is not None:
             print("Using override indices")
             train_mapping, val_mapping = override_indices
             if all([i in data_info.keys() for i in ("action_scaling", "state_scaling")]):
                 print("Loading action and state scaling from file")
                 act_scaling = data_info["action_scaling"]
                 stt_scaling = data_info["state_scaling"]
-                recompute_scaling = False
-        elif all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
+                # recompute_scaling = False
+        elif not recalc_override and all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
             print(f"Loading indices from file: {path}")
             if fullseq_override:
                 print("Overriding full seq config!")
@@ -485,7 +523,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 eps = episodes[idx]
                 trajectory = data[f"traj_{eps['episode_id']}"]
                 trajectory = load_h5_data(trajectory)
-                obs = convert_observation(trajectory["obs"], robot_state_only=True)
+                obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
                 actions = torch.from_numpy(trajectory["actions"]).float()
                 states = torch.from_numpy(obs["state"][:-1]).float()
                 train_acts.append(actions)
@@ -522,7 +560,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                     eps = episodes[idx]
                     trajectory = data[f"traj_{eps['episode_id']}"]
                     trajectory = load_h5_data(trajectory)
-                    obs = convert_observation(trajectory["obs"], robot_state_only=True)
+                    obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
                     actions = torch.from_numpy(trajectory["actions"]).float()
                     seq_size = actions.shape[0]
                     val_lengths.append(seq_size)
@@ -595,7 +633,7 @@ class ScalingFunction:
             print("Computing linear scaling")
             self.scaling_for = lambda x: x * torch.tensor(scaling)
             self.scaling_inv = lambda x: x / torch.tensor(scaling)
-        elif scaling=="norm": 
+        elif scaling=="norm":
             print("Computing norm scaling")
             act_mu = torch.mean(data, 0)
             act_std = torch.std(data, 0)
@@ -622,9 +660,9 @@ class ScalingFunction:
             raise ValueError(f"Unsupported action scaling given: {scaling}")
 
         if sep_idx is not None:
-            self.scaling_fcn_forward = lambda x: self.seperate_scaling(self.scaling_for, 
+            self.scaling_fcn_forward = lambda x: self.separate_scaling(self.scaling_for, 
                                                                        x, sep_idx)
-            self.scaling_fcn_inverse = lambda x: self.seperate_scaling(self.scaling_inv, 
+            self.scaling_fcn_inverse = lambda x: self.separate_scaling(self.scaling_inv, 
                                                                        x, sep_idx)
         else:
             self.scaling_fcn_forward = lambda x: self.scaling_for(x)
@@ -636,7 +674,7 @@ class ScalingFunction:
         elif mode=="inverse":
             return self.scaling_fcn_inverse(x)
     
-    def seperate_scaling(self, fcn, x, idx):
+    def separate_scaling(self, fcn, x, idx):
         return torch.hstack((fcn(x[:,:idx]), x[:,idx:]))
 
 

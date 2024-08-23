@@ -1,19 +1,19 @@
 method: skill
-notes: Base with more heads and with qvel in state.
+notes: Lower param vae.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
-  val_split: .1
+  val_split: .2
   preshuffle: False
   max_seq_len: 200
   action_scaling: normal
-  state_scaling: 1
+  state_scaling: normal
   gripper_scaling: False
   augment: False
   augmentation:
     subsequence_rate: 0.33
     seq_masking_rate: 0.1
     type_masking_rate: 0
-  max_count: 50
+  max_count: 100
   indices:
   full_seq: True
 
@@ -30,18 +30,18 @@ model:
   
   encoder:  
     dropout : 0.1
-    nheads : 8
-    dim_feedforward : 512
-    enc_layers : 3
+    nheads : 4
+    dim_feedforward : 256
+    enc_layers : 2
     dec_layers : 4
     pre_norm : False
   
   decoder:
     dropout : 0.1
-    nheads : 8
-    dim_feedforward : 512
-    enc_layers : 3
-    dec_layers : 5
+    nheads : 4
+    dim_feedforward : 256
+    enc_layers : 2
+    dec_layers : 4
     pre_norm : False
   
   state_encoder:
@@ -53,7 +53,7 @@ loss:
   kl_weights: 0.01
 
 training:
-  out_dir: out/PegInsertion/VAE/055
+  out_dir: out/PegInsertion/VAE/058
   max_it: 1
   batch_size: 8
   batch_size_val: 8
@@ -67,7 +67,7 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0000
-  lr: 0.000003
+  lr: 0.000001
   lr_decay: 0
   weight_decay: 0.0001
   gradient_accumulation: 1
