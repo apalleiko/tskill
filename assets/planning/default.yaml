@@ -30,12 +30,12 @@ loss:
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/027
+  out_dir: out/PegInsertion/Plan/028
   train_vae: True
   max_it: 100000
-  batch_size: 24
-  batch_size_val: 12
-  batch_size_alt: 12
+  batch_size: 12
+  batch_size_val: 2
+  batch_size_alt: 2
   fraction_alt: .5
   val_alt: True
   print_every: 25

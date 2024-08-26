@@ -115,7 +115,7 @@ def main(args):
     # cfg stuff
     if args.debug:
         cfg["training"]["batch_size"] = 6
-        cfg["training"]["batch_size_alt"] = 0
+        cfg["training"]["batch_size_alt"] = 1
         cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
@@ -279,6 +279,7 @@ def main(args):
                 t_eta = datetime.timedelta(seconds=t_eta)
                 t_eta = str(t_eta).split(".")[0]
                 t_elapsed = datetime.timedelta(seconds=t_elapsed)
+                t_elapsed = str(t_elapsed).split(".")[0]
                 print_str = (
                     f"[Epoch {epoch_it:04d}] it={it:04d}, "
                 )

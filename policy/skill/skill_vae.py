@@ -385,17 +385,15 @@ class TSkillCVAE(nn.Module):
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)
 
-        # src padding mask should pad unused skills but not other inputs # TODO fix 
-        src_pad_mask = torch.cat([torch.zeros(bs, dec_src.shape[0]-src_pad_mask.shape[1]).to(self._device),
-                                  src_pad_mask], dim=1)
+        # src padding mask will always have a skill 
+        src_pad_mask = torch.zeros(bs, dec_src.shape[0]).to(self._device, torch.bool)
         
         # reverse batch mask for transformer calls to fully padded inputs to avoid NaNs
         # corresponding outputs are set to zero afterwards
-        src_pad_mask[batch_mask, :] = False
         tgt_pad_mask[batch_mask, :] = False
 
         dec_output = self.decoder(src=dec_src,
-                                  src_key_padding_mask=src_pad_mask, 
+                                  src_key_padding_mask=None, 
                                   src_is_causal=False, # pseudo-causal
                                   src_mask=src_mask,
                                   memory_key_padding_mask=src_pad_mask,
@@ -455,8 +453,6 @@ class TSkillCVAE(nn.Module):
                 # If decoding autoregressively, need to pass in all states and img_infos that will be encountered
                 qpos_t = qpos[:,t:tf,:] # (bs, MSL, state_dim)
                 img_info_t = (img_src[t:tf,...], img_pe[t:tf,...]) # (MSL, bs, num_cam, h*w, c)
-                # Need to repeat skills to allow them attend to different conditional info at different steps
-                sk_z = sk_z.repeat(self.max_skill_len,1,1) # (MSL, bs, latent_dim)
             else:
                 tgt = None
                 qpos_t = qpos[:,t:t+1,:] # (bs, 1, state_dim)
