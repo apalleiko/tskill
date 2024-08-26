@@ -1,8 +1,8 @@
 method: skill
-notes: Lower param vae.
+notes: Higher param VAE, with .1 dropout and .01 KL.
 data:
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
-  val_split: .2
+  val_split: .28
   preshuffle: False
   max_seq_len: 200
   action_scaling: normal
@@ -13,7 +13,7 @@ data:
     subsequence_rate: 0.33
     seq_masking_rate: 0.1
     type_masking_rate: 0
-  max_count: 100
+  max_count: 70
   indices:
   full_seq: True
 
@@ -23,25 +23,25 @@ model:
   z_dim : 128
   hidden_dim: 256
   max_skill_len: 10
-  conditional_decode: False
+  conditional_decode: True
   autoregressive_decode: True
   encode_state: True
   encoder_is_causal: True
   
   encoder:  
     dropout : 0.1
-    nheads : 4
+    nheads : 8
     dim_feedforward : 256
-    enc_layers : 2
-    dec_layers : 4
+    enc_layers : 4
+    dec_layers : 6
     pre_norm : False
   
   decoder:
     dropout : 0.1
-    nheads : 4
+    nheads : 8
     dim_feedforward : 256
-    enc_layers : 2
-    dec_layers : 4
+    enc_layers : 4
+    dec_layers : 6
     pre_norm : False
   
   state_encoder:
@@ -53,7 +53,7 @@ loss:
   kl_weights: 0.01
 
 training:
-  out_dir: out/PegInsertion/VAE/058
+  out_dir: out/PegInsertion/VAE/059
   max_it: 1
   batch_size: 8
   batch_size_val: 8
