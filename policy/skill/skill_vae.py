@@ -296,10 +296,10 @@ class TSkillCVAE(nn.Module):
         Decode an individual skill into actions, possibly based on current 
         image and state depending on self.conditional_decode
         args: 
-            z: (MSL|1, bs, latent_dim)
+            z: (1, bs, latent_dim)
             qpos: (MSL|1, bs, state_dim)
             img_info: (img_src, img_pe): (MSL|1, bs, num_cam, h*w, c & hidden)
-            src_pad_mask: (bs, MSL|1)
+            src_pad_mask: (bs, 1)
             tgt_pad_mask: (bs, MSL|<)
             src_mask: (bs, MSL|<*(2+num_features*num_cam), ")
             mem_mask: (bs, MSL|<, MSL|<*(2+num_features*num_cam))
@@ -332,8 +332,8 @@ class TSkillCVAE(nn.Module):
         dec_type_embed = dec_type_embed.unsqueeze(1).repeat(1, bs, 1) # (4, bs, hidden_dim)
 
         # skills
-        z_src = self.dec_z(z) # (1|MSL, bs, hidden_dim)
-        z_src = self.dec_input_z_norm(z_src) # (1|MSL, bs, hidden_dim)
+        z_src = self.dec_z(z) # (1, bs, hidden_dim)
+        z_src = self.dec_input_z_norm(z_src) # (1, bs, hidden_dim)
         z_src = z_src + dec_type_embed[3, :, :] # add type 4 embedding
         z_pe = torch.zeros_like(z_src) # no pe, only one skill per decoding step
 
@@ -359,31 +359,28 @@ class TSkillCVAE(nn.Module):
             state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
             state_pe = torch.zeros_like(state_src) # no pe, only one obs per decoding step
 
-            # # image, only use one image to decode rest of the skills # BUG
-            # img_src, img_pe = img_info # (1|MSL, bs, num_cam, h*w, c&hidden)
-            # img_src = self.image_proj(img_src) # (1|MSL, bs, num_cam, h*w, hidden)
-            # img_src = self.image_feat_norm(img_src)
-            # img_pe = img_pe * self.img_pe_scale_factor
-            # img_src = img_src.flatten(2,3) # (1|MSL, bs, num_cam*h*w, hidden)
-            # img_pe = img_pe.flatten(2,3)
-            # img_src = img_src.permute(0, 2, 1, 3) # (1|MSL, h*num_cam*w, bs, hidden)
-            # img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
-            # img_src = img_src.flatten(0,1) # (1|MSL*num_cam*h*w, bs, hidden)
-            # img_pe = img_pe.flatten(0,1)
-            # img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
+            # image, only use one image to decode rest of the skills
+            img_src, img_pe = img_info # (1|MSL, bs, num_cam, h*w, c&hidden)
+            img_src = self.image_proj(img_src) # (1|MSL, bs, num_cam, h*w, hidden)
+            img_src = self.image_feat_norm(img_src)
+            img_pe = img_pe * self.img_pe_scale_factor
+            img_src = img_src.flatten(2,3) # (1|MSL, bs, num_cam*h*w, hidden)
+            img_pe = img_pe.flatten(2,3)
+            img_src = img_src.permute(0, 2, 1, 3) # (1|MSL, h*num_cam*w, bs, hidden)
+            img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
+            img_src = img_src.flatten(0,1) # (1|MSL*num_cam*h*w, bs, hidden)
+            img_pe = img_pe.flatten(0,1)
+            img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
 
-            # dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z|MSL*(state + img + z), bs, hidden)
-            # dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0)
+            dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z|MSL*(state + img + z), bs, hidden)
+            dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0)
 
-            dec_src = torch.cat([state_src, z_src], axis=0) # (MSL*(state + z), bs, hidden)
-            dec_src_pe = torch.cat([state_pe, z_pe], axis=0)
         else:
             dec_src = z_src # (z, bs, hidden)
             dec_src_pe = z_pe
             # only get skill sections of src and mem masks with no conditional decoding
-            n_tgt = dec_tgt.shape[0]
-            src_mask = src_mask[-n_tgt:, -n_tgt:]
-            mem_mask = mem_mask[:,-n_tgt:].to(self._device)
+            src_mask = src_mask[-1:, -1:]
+            mem_mask = mem_mask[:,-1:].to(self._device)
 
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)

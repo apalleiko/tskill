@@ -151,9 +151,11 @@ class Trainer(BaseTrainer):
         # Get model outputs
         if alt := kwargs.get("alt",False):
             self.model.conditional_plan = True
+            self.model.vae.conditional_decode = True
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
             self.model.conditional_plan = False
+            self.model.vae.conditional_decode = False
 
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]

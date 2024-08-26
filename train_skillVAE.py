@@ -170,6 +170,8 @@ def main(args):
 
     # Model
     model = config.get_model(cfg, device=device)
+    if torch.cuda.device_count() > 1:
+        model = torch.nn.DataParallel(model)
     print(model)
 
     # Intialize training

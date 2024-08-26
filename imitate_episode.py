@@ -392,6 +392,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     o = convert_observation(obs, robot_state_only=True, pos_only=False)
                     # State
                     state = dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
+                    # state = data["state"][:,t:t+1,:]
                     # Image
                     rgbd = o["rgbd"]
                     rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
