@@ -378,6 +378,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 # Take a zero step to get initial observations
                 obs, _, _, _, info = env.step(np.zeros_like(ori_actions[0]))
                 t_plan = 0
+                z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device) # (bs, skill_seq, z_dim)
 
                 if pbar is not None:
                     pbar.reset(total=max_episode_steps)
@@ -402,7 +403,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     img_src, img_pe = model.stt_encoder(rgb) # (seq, bs, num_cam, h*w, c|hidden)
                     _,_,num_cam,num_feats,_ = img_src.shape
 
-                    z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device) # (bs, skill_seq, z_dim)
                     dec_skill_pad_mask = torch.zeros(1,1)
                     current_data = dict()
                     
@@ -500,12 +500,11 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                             dec_states = torch.cat((dec_states, state), dim=1)
 
                         num_actions = dec_tgt.shape[1]
-                        dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats, dec_tgt.shape[1])
+                        dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, dec_tgt.shape[1])
                         seq_pad_mask = torch.zeros(1,num_actions) # (bs, MSL|<)
-                        latent_t = latent.repeat(num_actions,1,1) # (MSL|<, bs, latent_dim)
 
                         with torch.no_grad():
-                            a_pred = vae.skill_decode(latent_t, dec_states, (dec_img_srcs,dec_img_pes),
+                            a_pred = vae.skill_decode(latent, dec_states, (dec_img_srcs,dec_img_pes),
                                                       dec_skill_pad_mask, seq_pad_mask,
                                                       dec_src_mask, dec_mem_mask, dec_tgt_mask,
                                                       tgt=dec_tgt) # (MSL|<, bs, action_dim)

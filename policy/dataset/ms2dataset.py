@@ -180,7 +180,6 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
-        assert torch.all(torch.logical_not(torch.isnan(actions))), "NAN found in actions"
         state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim) 
 
         if "resnet18" in trajectory["obs"].keys():

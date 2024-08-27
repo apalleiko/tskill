@@ -374,7 +374,6 @@ class TSkillCVAE(nn.Module):
 
             dec_src = torch.cat([state_src, img_src, z_src], axis=0) # (state + img + z|MSL*(state + img + z), bs, hidden)
             dec_src_pe = torch.cat([state_pe, img_pe, z_pe], axis=0)
-
         else:
             dec_src = z_src # (z, bs, hidden)
             dec_src_pe = z_pe
@@ -386,7 +385,7 @@ class TSkillCVAE(nn.Module):
         dec_src = self.dec_src_norm(dec_src)
 
         # src padding mask will always have a skill 
-        src_pad_mask = torch.zeros(bs, dec_src.shape[0]).to(self._device, torch.bool)
+        # src_pad_mask = torch.zeros(bs, dec_src.shape[0]).to(self._device, torch.bool)
         
         # reverse batch mask for transformer calls to fully padded inputs to avoid NaNs
         # corresponding outputs are set to zero afterwards
@@ -396,7 +395,7 @@ class TSkillCVAE(nn.Module):
                                   src_key_padding_mask=None, 
                                   src_is_causal=False, # pseudo-causal
                                   src_mask=src_mask,
-                                  memory_key_padding_mask=src_pad_mask,
+                                  memory_key_padding_mask=None,
                                   memory_mask=mem_mask,
                                   memory_is_causal=False, 
                                   tgt=dec_tgt,

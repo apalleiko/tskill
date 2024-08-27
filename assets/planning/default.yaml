@@ -7,7 +7,7 @@ data:
   max_seq_len: 200
   augment: True
   augmentation:
-    subsequence_rate: 0.75
+    subsequence_rate: 0.5
     image_aug: 0
   max_count: 60
   indices:
@@ -23,7 +23,9 @@ model:
   dec_layers : 6
   pre_norm : False
   conditional_decode: False # Alt
-  conditional_plan: False # Alt
+  conditional_plan: True # Alt
+  # decode_confidence: False
+  # plan_distance: False
 
 loss:
   z_weight: 1
@@ -33,11 +35,11 @@ training:
   out_dir: out/PegInsertion/Plan/028
   train_vae: True
   max_it: 100000
-  batch_size: 12
-  batch_size_val: 2
-  batch_size_alt: 2
+  batch_size: 6
+  batch_size_val: 6
+  batch_size_alt: 1
   fraction_alt: .5
-  val_alt: True
+  val_alt: False
   print_every: 25
   visualize_every: 2000
   checkpoint_every: 1000
