@@ -59,6 +59,7 @@ class Trainer(BaseTrainer):
     def train_step(self, data):
         self.model.train()
         self.optimizer.zero_grad()
+        alt_loss_dict = alt_metric_dict = None
 
         if self.alt_ratio > 0 and (self.step_it + 1) % int(1 / self.alt_ratio) == 0:
             mb_losses, mb_metrics = [], []
@@ -76,28 +77,34 @@ class Trainer(BaseTrainer):
                     _dict[k] = v.item()
                 mb_loss_dict = _dict
                 mb_losses.append(mb_loss_dict)
+                mb_loss = mb_loss / self.alt_batch_num / 2
                 mb_loss.backward()
     
                 del mb_loss
                 del mb_data
 
-            loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
-            metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "traj" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
-        else:
-            loss_dict, metric_dict = self.compute_loss(data)
+            alt_loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
+            alt_metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "traj" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
 
-            loss = 0.0
-            _dict = {}
-            for k, v in loss_dict.items():
-                loss += v
-                _dict[k] = v.item()
-            loss_dict = _dict
-            loss.backward()
+        # Always compute normal loss gradient
+        loss_dict, metric_dict = self.compute_loss(data)
 
+        loss = 0.0
+        _dict = {}
+        for k, v in loss_dict.items():
+            loss += v
+            _dict[k] = v.item()
+        loss_dict = _dict
+
+        if alt_loss_dict is not None:
+            loss_dict = {k: np.mean([l[k] for l in (loss_dict, alt_loss_dict)]) for k in loss_dict.keys()}
+            metric_dict = {k: torch.mean(torch.stack([m[k] for m in (metric_dict, alt_metric_dict)])).item() if "vector" not in k else metric_dict[k] for k in metric_dict.keys()}
+            loss = loss / 2
+
+        loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
         self.optimizer.step()
 
-        {k: v.item() for k, v in metric_dict.items() if "vector" not in k}
         self.step_it += 1
 
         return loss_dict, metric_dict
@@ -150,13 +157,13 @@ class Trainer(BaseTrainer):
         
         # Get model outputs
         if alt := kwargs.get("alt",False):
-            prev_cond_plan = self.model.conditional_plan
+            # prev_cond_plan = self.model.conditional_plan
             prev_cond_dec = self.model.vae.conditional_decode
-            self.model.conditional_plan = not prev_cond_plan
+            # self.model.conditional_plan = not prev_cond_plan
             self.model.vae.conditional_decode = not prev_cond_dec
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
-            self.model.conditional_plan = prev_cond_plan
+            # self.model.conditional_plan = prev_cond_plan
             self.model.vae.conditional_decode = prev_cond_dec
 
         a_hat = out["a_hat"]
@@ -166,7 +173,8 @@ class Trainer(BaseTrainer):
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
-        loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        # loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        metric_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Set target and pred latents to 0 for padded skill outputs
         z_hat_l = z_hat[latent_loss_mask]

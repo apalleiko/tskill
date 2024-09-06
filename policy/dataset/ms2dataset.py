@@ -180,7 +180,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
-        state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim) 
+        state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim)
 
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
@@ -300,59 +300,36 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     for the specific order that is used in the SkillVAE model
     """
     dec_src_len = max_skill_len * (1 + num_img_feats) + 1 # (MSL*(q + img_feats) + z)
-    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len) #BUG
-    # tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
     mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
-    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
-    
-    src_mask[:max_skill_len,:max_skill_len] =  ~torch.diag(torch.ones(max_skill_len)).to(torch.bool) # Unmask qpos self attention
+    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked    
     src_mask[-1:,-1:] = False # Unmask z self attention
     for s in range(max_skill_len):
+        im_begin = max_skill_len
         im_start = max_skill_len + s*num_img_feats
         im_end = im_start + num_img_feats
-        zs = -max_skill_len + s
-        # Decoder mask
-        src_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
-        src_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
-        src_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+        q_start = 0
+        # Src mask
+        src_mask[s,q_start:s+1] = False # Unmask qpos self attention 
+        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
+        src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
         src_mask[im_start:im_end,-1] = False # Unmask img features attention to z
         src_mask[s,-1] = False # Unmask qpos attention to z
-        # Memory mask, leave column 0 all True to mask attention to start token 
-        mem_mask[s,im_start:im_end] = False # Unmask action attention to img features
+        # Memory mask
+        mem_mask[s,im_begin:im_end] = False # Unmask action attention to img features
         mem_mask[s,-1] = False # Unmask action attention to z
-        mem_mask[s,s] = False # Unmask action attention to qpos
+        mem_mask[s,q_start:s+1] = False # Unmask action attention to qpos
 
     return src_mask, mem_mask, tgt_mask
 
 
-# def get_dec_ar_masks(num_img_feats, max_skill_len): #BUG
-#     """ 
-#     The masks for this information will be diagonal such that at each timestep, 
-#     the model can only attend to the conditional info at that timestep. This is
-#     for the specific order that is used in the SkillVAE model
-#     """
-#     dec_src_len = max_skill_len + 1 # (MSL*q + z)
-#     tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
-#     mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
-#     src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked    
-#     src_mask[:max_skill_len,:max_skill_len] =  ~torch.diag(torch.ones(max_skill_len)).to(torch.bool) # Unmask qpos self attention
-#     src_mask[-1:,-1:] = False # Unmask z self attention
-#     for s in range(max_skill_len):
-#         # Decoder mask
-#         src_mask[s,-1] = False # Unmask qpos attention to z
-#         # Memory mask, leave column 0 all True to mask attention to start token 
-#         mem_mask[s,-1] = False # Unmask action attention to z
-#         mem_mask[s,s] = False # Unmask action attention to qpos
-
-#     return src_mask, mem_mask, tgt_mask
-
-
-def get_plan_ar_masks(num_img_feats, max_num_skills): #BUG
+def get_plan_ar_masks(num_img_feats, max_num_skills):
     """
     The masks for this information will be causal for the skills
     """
-    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
-    tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+    # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
     # Only pass in the relevant timestep info (at the beginning of each skill)
     plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
     mem_mask = torch.ones(max_num_skills, plan_src_len).to(torch.bool) # Start with everything masked
@@ -360,20 +337,22 @@ def get_plan_ar_masks(num_img_feats, max_num_skills): #BUG
     src_mask[-num_img_feats:,-num_img_feats:] = False # Unmask goal self attention block
     
     for s in range(max_num_skills):
+        im_begin = max_num_skills
         im_start = max_num_skills + s*num_img_feats
         im_end = im_start + num_img_feats
+        q_start = 0
 
         # Src mask
-        src_mask[s,s] = False # Unmask qpos self attention
-        src_mask[im_start:im_end, im_start:im_end] = False # Unmask img features self attention block
-        src_mask[s,im_start:im_end] = False # Unmask qpos attention to img features
-        src_mask[im_start:im_end,s] = False # Unmask img features attention to qpos
+        src_mask[s,q_start:s+1] = False # Unmask qpos self attention
+        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
+        src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
         src_mask[im_start:im_end,-num_img_feats:] = False # Unmask img features attention to goal
         src_mask[s,-num_img_feats:] = False # Unmask qpos attention to goal
         # Memory mask
-        mem_mask[s,im_start:im_end] = False # Unmask skill attention to img features
+        mem_mask[s,im_begin:im_end] = False # Unmask skill attention to img features
         mem_mask[s,-num_img_feats:] = False # Unmask skill attention to goal
-        mem_mask[s,s] = False # Unmask skill attention to qpos
+        mem_mask[s,q_start:s+1] = False # Unmask skill attention to qpos
 
     return src_mask, mem_mask, tgt_mask
 
@@ -660,6 +639,7 @@ class ScalingFunction:
 
 class DataAugmentation:
     def __init__(self, cfg, cfg_model) -> None:
+        self.cfg = cfg
         self.method = cfg["method"]
         self.max_seq_len = cfg["data"]["max_seq_len"]
         self.max_skill_len = cfg_model["max_skill_len"]
@@ -669,7 +649,7 @@ class DataAugmentation:
         self.seq_masking_rate = cfg_aug.get("seq_masking_rate", 0)
         self.type_masking_rate = cfg_aug.get("type_masking_rate", 0)
         self.img_aug = cfg_aug.get("image_aug", 0)
-        self.input_noise = cfg_aug.get("input_noise", False)
+        self.input_noise = cfg_aug.get("input_noise", 0)
 
     def __call__(self, data):
         
@@ -682,8 +662,29 @@ class DataAugmentation:
         if self.type_masking_rate > 0:
             data = self.type_masking(data)
 
+        if self.input_noise > 0:
+            data = self.additive_input_noise(data)
+
         return data
     
+    def additive_input_noise(self, data):
+        feat_std = 0.05
+        pos_std = 0.01
+        vel_std = 0.005
+        
+        val = torch.rand(1)
+        if self.input_noise > val:
+            state_dim = data["state"].shape[-1] // 2
+            state_noise = torch.randn(data["state"].shape)
+            state_noise[:,:state_dim] = state_noise[:,:state_dim]*pos_std
+            state_noise[:,state_dim:] = state_noise[:,state_dim:]*vel_std
+            feat_noise = feat_std*torch.abs(torch.randn(data["img_feat"].shape))
+            
+            data["state"] = data["state"] + state_noise
+            data["img_feat"] = data["img_feat"] + feat_noise
+
+        return data
+
     def subsequence(self, data):
         seq_pad_mask = data["seq_pad_mask"]
         num_unpad_seq = torch.sum((~seq_pad_mask).to(torch.int16))

@@ -93,6 +93,7 @@ class TSkillPlan(nn.Module):
             *z_tgt: (bs, tgt_seq, z_dim)
         """
         qpos = data["state"].to(self._device)
+        qpos_plan = qpos[:,:,:self.state_dim]
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
         is_training = actions is not None
         if is_training:
@@ -132,13 +133,13 @@ class TSkillPlan(nn.Module):
             plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
             # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
             if is_training:
-                qpos_plan = qpos[:,::self.max_skill_len,...] # (bs, MNS, state_dim)
+                qpos_plan = qpos_plan[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
                 img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
             goal_info = (goal_src, goal_pe)
         else:
             plan_src_mask = plan_mem_mask = None
             plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
-            qpos_plan = qpos[:,:1,...] # (bs, 1, state_dim)
+            qpos_plan = qpos_plan[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
 
@@ -207,10 +208,12 @@ class TSkillPlan(nn.Module):
         type_embed = type_embed.unsqueeze(1).repeat(1, bs, 1) # (3, bs, hidden_dim)
 
         # position
-        qpos_src = self.src_state_proj(qpos) # (bs, 1|MNS, hidden_dim)
-        qpos_src = self.src_state_norm(qpos_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
-        qpos_src = qpos_src + type_embed[0, :, :] # add type 1 embedding
-        qpos_pe = torch.zeros_like(qpos_src, device=self._device) # No pe for current qpos
+        state_src = self.src_state_proj(qpos) # (bs, 1|MNS, hidden_dim)
+        state_src = self.src_state_norm(state_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
+        state_src = state_src + type_embed[0, :, :] # add type 1 embedding
+        # state_pe = torch.zeros_like(state_src, device=self._device) # No pe for current qpos
+        state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2) * self.src_pos_scale_factor
+        state_pe = state_pe.repeat(1,bs,1)
 
         # image
         img_src = self.image_proj(img_src) # (1|MNS, bs, num_cam, h*w, hidden)
@@ -220,6 +223,9 @@ class TSkillPlan(nn.Module):
         img_pe = img_pe.flatten(2,3)
         img_src = img_src.permute(0, 2, 1, 3) # (1|MNS, h*num_cam*w, bs, hidden)
         img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
+        img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.src_pos_scale_factor # (1|MSL, bs, hidden)
+        img_pos = img_pos.unsqueeze(1) # (1|MSL, 1, bs, hidden)
+        img_src = img_src + img_pos # Add temporal positional encoding
         img_src = img_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
         img_pe = img_pe.flatten(0,1)
         img_src = img_src + type_embed[1, :, :] # add type 2 embedding
@@ -237,17 +243,17 @@ class TSkillPlan(nn.Module):
         goal_src = goal_src + type_embed[2, :, :] # add type 3 embedding
 
         # src
-        src = torch.cat([qpos_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats|*MNS, bs, hidden_dim)
-        src_pe = torch.cat([qpos_pe, img_pe, goal_pe], axis=0) * self.src_pos_scale_factor
+        src = torch.cat([state_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats|*MNS, bs, hidden_dim)
+        src_pe = torch.cat([state_pe, img_pe, goal_pe], axis=0)
         # Add and norm
         src = src + src_pe
         src = self.src_norm(src)
 
         # tgt
         tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
-        # tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2) * self.tgt_pos_scale_factor # (MNS|<, 1, hidden_dim)
-        # tgt_pe = tgt_pe.repeat(1, bs, 1)  # (MNS|<, bs, hidden_dim)
-        tgt_pe = torch.zeros_like(tgt, device=self._device) #BUG
+        tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2) * self.tgt_pos_scale_factor # (MNS|<, 1, hidden_dim)
+        tgt_pe = tgt_pe.repeat(1, bs, 1)  # (MNS|<, bs, hidden_dim)
+        # tgt_pe = torch.zeros_like(tgt, device=self._device) #BUG
         tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs #TODO for all cases?
         tgt = tgt + tgt_pe
         tgt = self.tgt_norm(tgt)

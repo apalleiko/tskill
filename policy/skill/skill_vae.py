@@ -30,7 +30,7 @@ class TSkillCVAE(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
     def __init__(self, stt_encoder, 
                  encoder, decoder, 
-                 state_dim, action_dim, 
+                 state_dim, action_dim,
                  max_skill_len, z_dim,
                  conditional_decode,
                  autoregressive_decode,
@@ -72,7 +72,7 @@ class TSkillCVAE(nn.Module):
         # Create pe scaling factors
         self.enc_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
         self.enc_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
-        self.dec_z_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.dec_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
 
@@ -340,8 +340,8 @@ class TSkillCVAE(nn.Module):
         # tgt sequence
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            # dec_tgt_pe = self.get_pos_table(tgt.shape[1]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
-            dec_tgt_pe = torch.zeros_like(dec_tgt) #BUG
+            dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
+            # dec_tgt_pe = torch.zeros_like(dec_tgt)
             # Padded action outputs are not attended to by earlier actions and ignored in loss downstream.
             tgt_pad_mask[:, :] = False
         else:
@@ -357,7 +357,8 @@ class TSkillCVAE(nn.Module):
             state_src = self.dec_input_state_proj(qpos) # (bs, 1|MSL, hidden)
             state_src = self.dec_input_state_norm(state_src).permute(1,0,2) # (1|MSL, bs, hidden)
             state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
-            state_pe = torch.zeros_like(state_src) # no pe, only one obs per decoding step
+            # state_pe = torch.zeros_like(state_src) # no pe, only one obs per decoding step
+            state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_src_pos_scale_factor # (1|MSL, bs, hidden) TODO Add separate param
 
             # image, only use one image to decode rest of the skills
             img_src, img_pe = img_info # (1|MSL, bs, num_cam, h*w, c&hidden)
@@ -367,7 +368,10 @@ class TSkillCVAE(nn.Module):
             img_src = img_src.flatten(2,3) # (1|MSL, bs, num_cam*h*w, hidden)
             img_pe = img_pe.flatten(2,3)
             img_src = img_src.permute(0, 2, 1, 3) # (1|MSL, h*num_cam*w, bs, hidden)
-            img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
+            img_pe = img_pe.permute(0, 2, 1, 3)
+            img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.dec_src_pos_scale_factor # (1|MSL, bs, hidden) TODO Add separate param
+            img_pos = img_pos.unsqueeze(1) # (1|MSL, 1, bs, hidden)
+            img_src = img_src + img_pos # Add temporal positional encoding
             img_src = img_src.flatten(0,1) # (1|MSL*num_cam*h*w, bs, hidden)
             img_pe = img_pe.flatten(0,1)
             img_src = img_src + dec_type_embed[2, :, :] # add type 3 embedding
@@ -383,9 +387,6 @@ class TSkillCVAE(nn.Module):
 
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)
-
-        # src padding mask will always have a skill 
-        # src_pad_mask = torch.zeros(bs, dec_src.shape[0]).to(self._device, torch.bool)
         
         # reverse batch mask for transformer calls to fully padded inputs to avoid NaNs
         # corresponding outputs are set to zero afterwards

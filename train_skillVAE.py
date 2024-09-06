@@ -114,8 +114,8 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 6
-        cfg["training"]["batch_size_alt"] = 2
+        cfg["training"]["batch_size"] = 10
+        cfg["training"]["batch_size_alt"] = 1
         cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
@@ -250,7 +250,7 @@ def main(args):
             #     writer.add_graph(model, batch, use_strict_trace=False)
 
             metrics = {f"train/{k}": v for k, v in losses.items()}
-            metrics.update({f"train/metrics/{k}": v.item() for k, v in met.items() if "vector" not in k})
+            metrics.update({f"train/metrics/{k}": v for k, v in met.items() if "vector" not in k})
             if scheduler is not None:
                 metrics.update({"train/metrics/lr": scheduler.get_last_lr()[0]})
             wandb.log(metrics)

@@ -376,7 +376,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 img_obs = []
 
                 # Take a zero step to get initial observations
-                obs, _, _, _, info = env.step(np.zeros_like(ori_actions[0]))
+                obs, _, _, _, info = env.step(ori_actions[0])
                 t_plan = 0
                 z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device) # (bs, skill_seq, z_dim)
 
@@ -393,7 +393,10 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     o = convert_observation(obs, robot_state_only=True, pos_only=False)
                     # State
                     state = dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
-                    # state = data["state"][:,t:t+1,:]
+                    state_plan = state[:,:,:model.state_dim]
+                    # state2 = data["state"][:,t:t+1,:]
+                    # print(torch.nn.functional.mse_loss(state, state2))
+                    # print(state-state2)
                     # Image
                     rgbd = o["rgbd"]
                     rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
@@ -424,11 +427,11 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                                 z_tgt = z_tgt0
                                 img_srcs = img_src
                                 img_pes = img_pe
-                                states = state
+                                states = state_plan
                             else:
                                 img_srcs = torch.cat((img_srcs, img_src), dim=0)
                                 img_pes = torch.cat((img_pes, img_pe), dim=0)
-                                states = torch.cat((states, state), dim=1)
+                                states = torch.cat((states, state_plan), dim=1)
 
                             # Have to trasnpose feat/pe since bs is expected to be first dim
                             current_data["actions"] = None
@@ -457,15 +460,15 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
 
                             current_data["img_feat"] = img_src
                             current_data["img_pe"] = img_pe
-                            current_data["state"] = state
-                            # current_data["state"] = data["state"][:,:t+1:MSL,:]
+                            current_data["state"] = state_plan
                             current_data["actions"] = None
-                            
                             MNS = np.ceil((max_episode_steps-t) / MSL).astype(np.int16)
                             current_data["z_tgt"] = z_tgt
-                            
+
                             # Get current z pred
                             for s in range(MNS):
+                                plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, z_tgt.shape[1])
+                                current_data["plan_tgt_mask"] = plan_tgt_mask.unsqueeze(0)
                                 current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[1])
                                 with torch.no_grad():
                                     out = model(current_data, use_precalc=True)
