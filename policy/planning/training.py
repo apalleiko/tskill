@@ -173,8 +173,8 @@ class Trainer(BaseTrainer):
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
-        # loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-        metric_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        # metric_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Set target and pred latents to 0 for padded skill outputs
         z_hat_l = z_hat[latent_loss_mask]

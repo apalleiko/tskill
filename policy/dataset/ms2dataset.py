@@ -301,8 +301,9 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     """
     dec_src_len = max_skill_len * (1 + num_img_feats) + 1 # (MSL*(q + img_feats) + z)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    # tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
     mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
-    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked    
+    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
     src_mask[-1:,-1:] = False # Unmask z self attention
     for s in range(max_skill_len):
         im_begin = max_skill_len
@@ -328,14 +329,12 @@ def get_plan_ar_masks(num_img_feats, max_num_skills):
     """
     The masks for this information will be causal for the skills
     """
+    plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
     # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
-    # Only pass in the relevant timestep info (at the beginning of each skill)
-    plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
     mem_mask = torch.ones(max_num_skills, plan_src_len).to(torch.bool) # Start with everything masked
     src_mask = torch.ones(plan_src_len, plan_src_len).to(torch.bool) # Start with everything masked
     src_mask[-num_img_feats:,-num_img_feats:] = False # Unmask goal self attention block
-    
     for s in range(max_num_skills):
         im_begin = max_num_skills
         im_start = max_num_skills + s*num_img_feats

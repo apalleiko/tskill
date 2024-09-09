@@ -263,7 +263,7 @@ class TSkillCVAE(nn.Module):
         tgt_pad_mask[batch_mask, :] = False
 
         # query encoder model
-        enc_output = self.encoder(src=enc_src, 
+        enc_output = self.encoder(src=enc_src,
                                   src_key_padding_mask=src_pad_mask, 
                                   src_is_causal=self.encoder_is_causal,
                                   src_mask=src_mask,
@@ -337,17 +337,18 @@ class TSkillCVAE(nn.Module):
         z_src = z_src + dec_type_embed[3, :, :] # add type 4 embedding
         z_pe = torch.zeros_like(z_src) # no pe, only one skill per decoding step
 
-        # tgt sequence
+        # tgt
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL|<, 1, hidden_dim)
+            # TODO ONLY PASSING IN ZEROS FOR TGT
+            dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
+            dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)
-            # Padded action outputs are not attended to by earlier actions and ignored in loss downstream.
-            tgt_pad_mask[:, :] = False
+            tgt_pad_mask[:, :] = False # Padded action outputs not attended by earlier actions and ignored downstream.
         else:
-            dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2) * self.dec_tgt_pos_scale_factor # (MSL, 1, hidden_dim)
-            dec_tgt_pe = dec_tgt_pe.repeat(1, bs, 1)  # (MSL, bs, hidden_dim)
+            dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL, bs, hidden_dim)
             dec_tgt  = torch.zeros_like(dec_tgt_pe) # (MSL, bs, hidden_dim)
+            tgt_pad_mask[batch_mask, :] = False # Unmask fully padded tgts to avoid NaNs
         dec_tgt = dec_tgt + dec_tgt_pe
         dec_tgt = self.dec_tgt_norm(dec_tgt)
 
@@ -383,14 +384,10 @@ class TSkillCVAE(nn.Module):
             dec_src_pe = z_pe
             # only get skill sections of src and mem masks with no conditional decoding
             src_mask = src_mask[-1:, -1:]
-            mem_mask = mem_mask[:,-1:].to(self._device)
+            mem_mask = mem_mask[:,-1:]
 
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)
-        
-        # reverse batch mask for transformer calls to fully padded inputs to avoid NaNs
-        # corresponding outputs are set to zero afterwards
-        tgt_pad_mask[batch_mask, :] = False
 
         dec_output = self.decoder(src=dec_src,
                                   src_key_padding_mask=None, 
@@ -435,6 +432,7 @@ class TSkillCVAE(nn.Module):
         """
         bs = seq_pad_mask.shape[0]
         img_src, img_pe = img_info
+
         ### Decode skills one at a time
         a_hat = torch.zeros(0, bs, self.action_dim, device=self._device) # (0, bs, act_dim)
         for sk in range(z.shape[0]):

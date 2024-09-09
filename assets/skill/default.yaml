@@ -1,7 +1,7 @@
 method: skill
 notes:
 data:
-  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5
+  dataset: /home/apall/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
@@ -53,7 +53,7 @@ loss:
   kl_weights: 0.01
 
 training:
-  out_dir: out/PegInsertion/VAE/060
+  out_dir: out/PegInsertion/VAE/061
   max_it: 1
   batch_size: 2
   batch_size_val: 2

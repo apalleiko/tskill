@@ -17,7 +17,7 @@ from policy import config
 from policy.checkpoints import CheckpointIO
 from policy.dataset.ms2dataset import get_MS_loaders
 from policy.training import BaseTrainer as Trainer
-from policy.simulation_loss import SimLoss
+# from policy.simulation_loss import SimLoss
 
 matplotlib.use("Agg")
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -76,8 +76,8 @@ def get_args():
 
 
 def main(args):
-    default_vae = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
-    default_plan = "/home/mrl/Documents/Projects/tskill/assets/planning/default.yaml"
+    default_vae = "/home/apall/tskill/assets/skill/default.yaml"
+    default_plan = "/home/apall/tskill/assets/planning/default.yaml"
 
     if args.method == "skill":
         default_cfg_path = default_vae
@@ -114,7 +114,7 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 10
+        cfg["training"]["batch_size"] = 16
         cfg["training"]["batch_size_alt"] = 1
         cfg["training"]["visualize_every"] = 5
         cfg["training"]["print_every"] = 1
@@ -194,7 +194,7 @@ def main(args):
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device, scheduler=scheduler)
     # checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
     checkpoint_io = CheckpointIO(out_dir, model=model)
-    sim_loss = SimLoss(cfg, val_dataset)
+    # sim_loss = SimLoss(cfg, val_dataset)
 
     if args.bootstrap:
         checkpoint_io.load_model_only(args.ckpt_file)

@@ -251,9 +251,10 @@ class TSkillPlan(nn.Module):
 
         # tgt
         tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
-        tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2) * self.tgt_pos_scale_factor # (MNS|<, 1, hidden_dim)
-        tgt_pe = tgt_pe.repeat(1, bs, 1)  # (MNS|<, bs, hidden_dim)
-        # tgt_pe = torch.zeros_like(tgt, device=self._device) #BUG
+        # TODO ONLY PASSING IN ZEROS FOR TGT
+        tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
+        tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2).repeat(1, bs, 1) * self.tgt_pos_scale_factor # (MNS|<, bs, hidden_dim)
+        # tgt_pe = torch.zeros_like(tgt, device=self._device)
         tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs #TODO for all cases?
         tgt = tgt + tgt_pe
         tgt = self.tgt_norm(tgt)
