@@ -295,9 +295,7 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
 
 def get_dec_ar_masks(num_img_feats, max_skill_len):
     """ 
-    The masks for this information will be diagonal such that at each timestep, 
-    the model can only attend to the conditional info at that timestep. This is
-    for the specific order that is used in the SkillVAE model
+    Decoder autoregressive masks
     """
     dec_src_len = max_skill_len * (1 + num_img_feats) + 1 # (MSL*(q + img_feats) + z)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
@@ -306,10 +304,11 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
     src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
     src_mask[-1:,-1:] = False # Unmask z self attention
     for s in range(max_skill_len):
-        im_begin = max_skill_len
+        im_begin = max_skill_len # Where image tokens begin
         im_start = max_skill_len + s*num_img_feats
         im_end = im_start + num_img_feats
-        q_start = 0
+        q_start = 0 # Where q tokens begin
+
         # Src mask
         src_mask[s,q_start:s+1] = False # Unmask qpos self attention 
         src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
@@ -327,7 +326,7 @@ def get_dec_ar_masks(num_img_feats, max_skill_len):
 
 def get_plan_ar_masks(num_img_feats, max_num_skills):
     """
-    The masks for this information will be causal for the skills
+    Planning autoregressive masks.
     """
     plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
