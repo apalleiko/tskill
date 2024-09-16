@@ -378,7 +378,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 # Take a zero step to get initial observations
                 obs, _, _, _, info = env.step(ori_actions[0])
                 t_plan = 0
-                z_tgt0 = torch.zeros(1, 1, model.z_dim, device=model._device) # (bs, skill_seq, z_dim)
+                z_tgt0 = model.tgt_start_token # (bs, skill_seq, z_dim)
 
                 if pbar is not None:
                     pbar.reset(total=max_episode_steps)
@@ -493,7 +493,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     # Decode latent into actions
                     if vae.autoregressive_decode:
                         if t_plan % MSL == 0: # Decode new sequence
-                            dec_tgt = torch.zeros(1,1,vae.action_dim) # (bs, MSL|<, act_dim)
+                            dec_tgt = vae.dec_tgt_start_token # (bs, MSL|<, act_dim)
                             dec_img_srcs = img_src
                             dec_img_pes = img_pe
                             dec_states = state

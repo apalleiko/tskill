@@ -105,6 +105,8 @@ class TSkillCVAE(nn.Module):
         self.dec_input_z_norm = self.norm(self.hidden_dim)
         self.dec_src_norm = self.norm(self.hidden_dim)
         self.dec_tgt_norm = self.norm(self.hidden_dim)
+        self.dec_tgt_start_token = nn.Parameter(torch.zeros(1,1,self.action_dim))
+        # self.dec_tgt_start_token = torch.zeros(1,1,self.action_dim)
 
         # Action heads
         self.dec_action_joint_proj = nn.Linear(self.hidden_dim, action_dim - 1) # Decode joint actions
@@ -257,10 +259,6 @@ class TSkillCVAE(nn.Module):
         enc_tgt_pe = self.get_pos_table(max_num_skills).permute(1, 0, 2).repeat(1, bs, 1) * self.enc_tgt_pos_scale_factor
         enc_tgt = enc_tgt + enc_tgt_pe
         enc_tgt = self.enc_tgt_norm(enc_tgt)
-        
-        # reverse batch mask for transformer calls to fully padded inputs to avoid NaNs
-        src_pad_mask[batch_mask, :] = False
-        tgt_pad_mask[batch_mask, :] = False
 
         # query encoder model
         enc_output = self.encoder(src=enc_src,
@@ -276,14 +274,9 @@ class TSkillCVAE(nn.Module):
                                   tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
 
         latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
-        mu = latent_info[:, :, :self.z_dim]
-        logvar = latent_info[:, :, self.z_dim:]
+        mu = latent_info[:, :, :self.z_dim] # (skill_seq, bs, latent_dim)
+        logvar = latent_info[:, :, self.z_dim:] # (skill_seq, bs, latent_dim)
         latent_sample = reparametrize(mu, logvar) # (skill_seq, bs, latent_dim)
-
-        # replace with filler for fully padded batches
-        mu[:, batch_mask, :] = 0
-        logvar[:, batch_mask, :] = 0
-        latent_sample[:, batch_mask, :] = 0
         
         return mu, logvar, latent_sample
 
@@ -341,7 +334,7 @@ class TSkillCVAE(nn.Module):
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
             # TODO ONLY PASSING IN ZEROS FOR TGT
-            dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
+            # dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
             dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)
             tgt_pad_mask[:, :] = False # Padded action outputs not attended by earlier actions and ignored downstream.
@@ -391,11 +384,11 @@ class TSkillCVAE(nn.Module):
 
         dec_output = self.decoder(src=dec_src,
                                   src_key_padding_mask=None, 
-                                  src_is_causal=False, # pseudo-causal
+                                  src_is_causal=self.autoregressive_decode, # pseudo-causal
                                   src_mask=src_mask,
                                   memory_key_padding_mask=None,
                                   memory_mask=mem_mask,
-                                  memory_is_causal=False, 
+                                  memory_is_causal=self.autoregressive_decode, 
                                   tgt=dec_tgt,
                                   tgt_key_padding_mask=tgt_pad_mask,
                                   tgt_is_causal=self.autoregressive_decode,
@@ -446,7 +439,7 @@ class TSkillCVAE(nn.Module):
             # Get target actions for autoregressive decoding
             if self.autoregressive_decode:
                 # Always set first input as zeros, as "start" token, and shift other tgt actions right
-                tgt_0 = torch.zeros(bs, 1, self.action_dim, device=self._device) # (bs, 1, act_dim)
+                tgt_0 = self.dec_tgt_start_token.repeat(bs, 1, 1) # (bs, 1, act_dim)
                 tgt = torch.cat((tgt_0, actions[:,t:tf-1,:]), dim=1) # (bs, MSL, act_dim)
                 # If decoding autoregressively, need to pass in all states and img_infos that will be encountered
                 qpos_t = qpos[:,t:tf,:] # (bs, MSL, state_dim)

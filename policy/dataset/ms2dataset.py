@@ -752,45 +752,6 @@ class DataAugmentation:
 
         return data
 
-    def type_masking(self, data):
-        """Encoder/decoder type masking function. 
-        Always leaves at least 1 unmasked input type."""
-
-        raise NotImplementedError
-
-        if "rgb" in data.keys():
-            n_cam = data["rgb"].shape[1]
-        elif "img_feat" in data.keys():
-            n_cam = data["img_feat"].shape[1]
-        n_seq = (2 + n_cam) # HARDCODED
-        # Randomly apply mask to each input type (encoder img,act,qpos & decoder imgs)
-        enc_type_mask = torch.rand(n_seq) < self.type_masking_rate
-        # Unmask an input if all input masks are True
-        if torch.all(enc_type_mask):
-            i = torch.randint(0,n_seq,(1,1)).squeeze()
-            enc_type_mask[i] = False
-
-        enc_inp_len = self.max_seq_len * (n_seq)
-        enc_mask = torch.zeros(enc_inp_len).to(torch.bool)
-        for s in range(enc_type_mask.shape[0]-1):
-            if enc_type_mask[s]:
-                enc_mask[s*self.max_seq_len:(s+1)*self.max_seq_len] = True
-        enc_mask = enc_mask.unsqueeze(0).repeat(enc_inp_len, 1)
-        enc_mask = enc_mask.fill_diagonal_(False)
-
-        # Merge with existing masks if applicable
-        if "enc_mask" in data.keys():
-            data["enc_mask"] = data["enc_mask"] | enc_mask
-        else:
-            data["enc_mask"] = enc_mask
-
-        # Check if input mask + padding yields a fully masked input sequence
-        # If so, deactivate the input mask
-        if torch.sum(torch.logical_not(data["seq_pad_mask"].unsqueeze(0).repeat(enc_inp_len, n_seq) | data["enc_mask"]).to(torch.int)) < 10:
-            data["enc_mask"] = torch.zeros_like(data["enc_mask"])
-        
-        return data
-
 
 ### Commands for trajectory replay ###
 # python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10

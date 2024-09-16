@@ -1,7 +1,7 @@
 method: skill
 notes:
 data:
-  dataset: /home/apall/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
@@ -29,7 +29,7 @@ model:
   encoder_is_causal: True
   
   encoder:  
-    dropout : 0.1
+    dropout : 0.2
     nheads : 8
     dim_feedforward : 512
     enc_layers : 4
@@ -37,7 +37,7 @@ model:
     pre_norm : False
   
   decoder:
-    dropout : 0.1
+    dropout : 0.2
     nheads : 8
     dim_feedforward : 512
     enc_layers : 4
@@ -50,10 +50,10 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weights: 0.01
+  kl_weights: .1
 
 training:
-  out_dir: out/PegInsertion/VAE/061
+  out_dir: out/PegInsertion/VAE/065
   max_it: 1
   batch_size: 2
   batch_size_val: 2

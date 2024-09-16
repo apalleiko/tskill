@@ -76,8 +76,8 @@ def get_args():
 
 
 def main(args):
-    default_vae = "/home/apall/tskill/assets/skill/default.yaml"
-    default_plan = "/home/apall/tskill/assets/planning/default.yaml"
+    default_vae = "/home/mrl/Documents/Projects/tskill/assets/skill/default.yaml"
+    default_plan = "/home/mrl/Documents/Projects/tskill/assets/planning/default.yaml"
 
     if args.method == "skill":
         default_cfg_path = default_vae

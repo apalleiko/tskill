@@ -157,29 +157,34 @@ class Trainer(BaseTrainer):
         
         # Get model outputs
         if alt := kwargs.get("alt",False):
-            # prev_cond_plan = self.model.conditional_plan
+            prev_cond_plan = self.model.conditional_plan
             prev_cond_dec = self.model.vae.conditional_decode
-            # self.model.conditional_plan = not prev_cond_plan
-            self.model.vae.conditional_decode = not prev_cond_dec
+            self.model.conditional_plan = not prev_cond_plan
+            # self.model.vae.conditional_decode = not prev_cond_dec
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
-            # self.model.conditional_plan = prev_cond_plan
-            self.model.vae.conditional_decode = prev_cond_dec
+            self.model.conditional_plan = prev_cond_plan
+            # self.model.vae.conditional_decode = prev_cond_dec
 
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]
-        z_targ = out["vae_out"]["mu"].to(self.device).clone().detach() # (bs, skill_seq, z_dim)
+        mu_targ = out["vae_out"]["mu"].to(self.device).detach() # (bs, skill_seq, z_dim)
+        logvar = out["vae_out"]["logvar"].to(self.device).detach() # (bs, skill_seq, z_dim)
+        std_targ = (logvar / 2).exp()
 
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
         loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-        # metric_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Set target and pred latents to 0 for padded skill outputs
         z_hat_l = z_hat[latent_loss_mask]
-        z_targ_l = z_targ[latent_loss_mask]
-        loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
+        mu_targ_l = mu_targ[latent_loss_mask]
+        std_targ_l = std_targ[latent_loss_mask]
+        # MSE Loss
+        # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
+        # Squared Mehalanobis distance loss
+        loss_dict["z_loss"] = self.z_weight * torch.sum(F.mse_loss(z_hat_l, mu_targ_l, reduction="none") / std_targ_l) / num_latent
 
         metric_dict["aplan_vector_traj"] = a_hat.detach()
 
@@ -188,14 +193,11 @@ class Trainer(BaseTrainer):
             metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1]).detach()
             metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1]).detach()
 
-        for k,v in self.model.metrics.items():
-            metric_dict[k] = v.detach()
-
         if self.train_vae:
-            vae_loss_dict, vae_metric_dict = self.vae_trainer.raw_loss(out["vae_out"], data)
+            vae_loss_dict, vae_metric_dict = self.vae_trainer.compute_loss(data, out["vae_out"])
             for k,v in vae_loss_dict.items():
                 loss_dict[f"{k}"] = v
             for k,v in vae_metric_dict.items():
-                metric_dict[f"{k}"] = v.detach()
+                metric_dict[f"{k}"] = v
 
         return loss_dict, metric_dict

@@ -69,10 +69,8 @@ class TSkillPlan(nn.Module):
         self.tgt_norm = self.norm(self.hidden_dim)
         self.z_proj = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent
         self.tgt_z_proj = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
-
-        ### Distance metric
-        if self.distance_metric:
-            self.calc_distance = None #TODO
+        self.tgt_start_token = nn.Parameter(torch.zeros(1,1,self.z_dim))
+        # self.tgt_start_token = torch.zeros(1,1,self.z_dim)
 
         # Other
         self.metrics = dict()
@@ -113,7 +111,7 @@ class TSkillPlan(nn.Module):
         use_precalc = kwargs.get("use_precalc",False)
         if use_precalc and all(x in data.keys() for x in ("img_feat","img_pe")):
             img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
-            img_pe = data["img_pe"].transpose(0,1).to(self._device)
+            img_pe = data["img_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
         else:
             images = data["rgb"].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
@@ -121,7 +119,7 @@ class TSkillPlan(nn.Module):
         ### Goal image or features
         if "goal_feat" in data.keys():
             goal_src = data["goal_feat"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, c)
-            goal_pe = data["goal_pe"].transpose(0,1).to(self._device)
+            goal_pe = data["goal_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
         else:
             goal = data["goal"].to(self._device)
             goal_src, goal_pe = self.stt_encoder(goal)
@@ -147,13 +145,18 @@ class TSkillPlan(nn.Module):
         if is_training:
             # Whether to seperate planning of skills and actions from reconstruction in computation graph
             sep_vae_grad = kwargs.get("sep_vae_grad",False)
+
             # Get target skills from vae
             vae_out = self.vae(data, use_precalc=use_precalc)
-            z_tgt0 = torch.zeros(1,bs,self.z_dim, device=self._device)
+            
+            # Create tgt shifted right 1 token
+            z_tgt0 = self.tgt_start_token.repeat(1,bs,1)
             z_tgt = vae_out["mu"].permute(1,0,2) # (skill_seq, bs, z_dim)
             if sep_vae_grad: # Turn off vae grad calculation for planning z
                 z_tgt = z_tgt.clone().detach()
             z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...]))
+            
+            # Plan skills
             z_hat = self.forward_plan(goal_info, 
                                       qpos_plan, 
                                       img_info_plan,
@@ -168,6 +171,7 @@ class TSkillPlan(nn.Module):
                                              dec_src_mask, dec_mem_mask, dec_tgt_mask)
             if sep_vae_grad:
                 self.vae.requires_grad_(True)
+
             a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
         else:
             z_tgt = data["z_tgt"].permute(1,0,2) # (tgt_seq, bs, z_dim)
@@ -252,7 +256,7 @@ class TSkillPlan(nn.Module):
         # tgt
         tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
         # TODO ONLY PASSING IN ZEROS FOR TGT
-        tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
+        # tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
         tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2).repeat(1, bs, 1) * self.tgt_pos_scale_factor # (MNS|<, bs, hidden_dim)
         # tgt_pe = torch.zeros_like(tgt, device=self._device)
         tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs #TODO for all cases?

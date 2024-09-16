@@ -1,7 +1,7 @@
 method: plan
-notes: Full subsequencing with no conditional anything, no noise, and only z_loss
+notes: 
 data:
-  dataset: /home/apall/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
+  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
   val_split: .16
   preshuffle: False
   max_seq_len: 200
@@ -15,27 +15,27 @@ data:
   full_seq: True
 
 model:
-  vae_path: /home/apall/tskill/out/PegInsertion/VAE/061
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/065
   hidden_dim: 256
-  dropout : 0.1
+  dropout : 0.2
   nheads : 8
   dim_feedforward : 1024
   enc_layers : 4
   dec_layers : 6
   pre_norm : False
   conditional_decode: False
-  conditional_plan: False 
+  conditional_plan: False # Alt
 
 loss:
   z_weight: 1
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/033
+  out_dir: out/PegInsertion/Plan/040
   train_vae: True
   max_it: 100000
-  batch_size: 16
-  batch_size_val: 16
+  batch_size: 10
+  batch_size_val: 10
   batch_size_alt: 1
   fraction_alt: 0.0
   val_alt: False
@@ -44,7 +44,7 @@ training:
   checkpoint_every: 1000
   validate_every: 1000
   backup_every: 2000
-  model_selection_metric: z_loss
+  model_selection_metric: act_plan_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
