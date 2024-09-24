@@ -162,7 +162,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     cfg["data"]["pad"] = True
     cfg["data"]["augment"] = False
     cfg["data"]["full_seq"] = False
-    cfg["data"]["dataset"] = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_256.h5"
+    cfg["data"]["dataset"] = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5"
     cfg["training"]["use_precalc"] = True
     use_precalc = True
     # use_precalc = cfg["training"].get("use_precalc",False)
@@ -394,9 +394,9 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     # State
                     state = dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
                     state_plan = state[:,:,:model.state_dim]
-                    # state2 = data["state"][:,t:t+1,:]
-                    # print(torch.nn.functional.mse_loss(state, state2))
-                    # print(state-state2)
+                    state2 = data["state"][:,t:t+1,:]
+                    print(torch.nn.functional.mse_loss(state, state2))
+                    print(state-state2)
                     # Image
                     rgbd = o["rgbd"]
                     rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)

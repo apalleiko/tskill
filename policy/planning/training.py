@@ -160,11 +160,11 @@ class Trainer(BaseTrainer):
             prev_cond_plan = self.model.conditional_plan
             prev_cond_dec = self.model.vae.conditional_decode
             self.model.conditional_plan = not prev_cond_plan
-            # self.model.vae.conditional_decode = not prev_cond_dec
+            self.model.vae.conditional_decode = not prev_cond_dec
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
             self.model.conditional_plan = prev_cond_plan
-            # self.model.vae.conditional_decode = prev_cond_dec
+            self.model.vae.conditional_decode = prev_cond_dec
 
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]
