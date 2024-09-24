@@ -1,0 +1,90 @@
+import torch
+
+def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
+    """Functions for generating a skill padding mask from a given sequence padding mask,
+    based on the max skill length from the config. Always adds the padding at the end.
+        - seq_pad: tensor (seq)
+        - max_skill_len: int
+    """
+    max_num_skills = torch.ceil(torch.tensor(seq_pad.shape[0]/max_skill_len)).to(torch.int)
+    num_unpad_seq = torch.sum(torch.logical_not(seq_pad).to(torch.int16))
+    num_unpad_skills = torch.ceil(num_unpad_seq / max_skill_len) # get skills with relevant outputs TODO handle non divisible skill lengths
+    skill_pad_mask = torch.zeros(max_num_skills) # True is unattended
+    skill_pad_mask[num_unpad_skills.to(torch.int16):] = 1
+    skill_pad_mask = skill_pad_mask.to(torch.bool)
+    return skill_pad_mask
+    
+
+def get_dec_ar_masks(num_img_feats, max_skill_len):
+    """ 
+    Decoder autoregressive masks
+    """
+    dec_src_len = max_skill_len * (1 + num_img_feats) + 1 # (MSL*(q + img_feats) + z)
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len)
+    # tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
+    mem_mask = torch.ones(max_skill_len, dec_src_len).to(torch.bool) # Start with everything masked
+    src_mask = torch.ones(dec_src_len, dec_src_len).to(torch.bool) # Start with everything masked
+    src_mask[-1:,-1:] = False # Unmask z self attention
+    for s in range(max_skill_len):
+        im_begin = max_skill_len # Where image tokens begin
+        im_start = max_skill_len + s*num_img_feats
+        im_end = im_start + num_img_feats
+        q_start = 0 # Where q tokens begin
+
+        # Src mask
+        src_mask[s,q_start:s+1] = False # Unmask qpos self attention 
+        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
+        src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
+        src_mask[im_start:im_end,-1] = False # Unmask img features attention to z
+        src_mask[s,-1] = False # Unmask qpos attention to z
+        # Memory mask
+        mem_mask[s,im_begin:im_end] = False # Unmask action attention to img features
+        mem_mask[s,-1] = False # Unmask action attention to z
+        mem_mask[s,q_start:s+1] = False # Unmask action attention to qpos
+
+    return src_mask, mem_mask, tgt_mask
+
+
+def get_plan_ar_masks(num_img_feats, max_num_skills):
+    """
+    Planning autoregressive masks.
+    """
+    plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+    # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
+    mem_mask = torch.ones(max_num_skills, plan_src_len).to(torch.bool) # Start with everything masked
+    src_mask = torch.ones(plan_src_len, plan_src_len).to(torch.bool) # Start with everything masked
+    src_mask[-num_img_feats:,-num_img_feats:] = False # Unmask goal self attention block
+    for s in range(max_num_skills):
+        im_begin = max_num_skills
+        im_start = max_num_skills + s*num_img_feats
+        im_end = im_start + num_img_feats
+        q_start = 0
+
+        # Src mask
+        src_mask[s,q_start:s+1] = False # Unmask qpos self attention
+        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
+        src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
+        src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
+        src_mask[im_start:im_end,-num_img_feats:] = False # Unmask img features attention to goal
+        src_mask[s,-num_img_feats:] = False # Unmask qpos attention to goal
+        # Memory mask
+        mem_mask[s,im_begin:im_end] = False # Unmask skill attention to img features
+        mem_mask[s,-num_img_feats:] = False # Unmask skill attention to goal
+        mem_mask[s,q_start:s+1] = False # Unmask skill attention to qpos
+
+    return src_mask, mem_mask, tgt_mask
+
+
+def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len):
+    """
+    Gets a causal mask for the encoder. Is only the size of max seq len, so has to be repeated in the encoder itself.
+    """
+    enc_causal_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_seq_len)
+    enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills)
+    enc_mem_mask = torch.ones(max_num_skills, max_seq_len).to(torch.bool)
+    for s in range(max_num_skills):
+        sk_end = s*max_skill_len + max_skill_len
+        enc_mem_mask[s,:sk_end] = False # Unmask skill attention to prior sequence items
+    return enc_causal_mask, enc_mem_mask, enc_tgt_mask

@@ -95,28 +95,9 @@ def load_h5_data(data):
         else:
             out[k] = load_h5_data(data[k])
     return out
-
-
-class ManiSkillDataset(Dataset):
-    def __init__(self, dataset_file: str, indices: list) -> None:
-        self.dataset_file = dataset_file
-        self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices
-    
-    def __len__(self):
-        raise(NotImplementedError)
-    
-    def __getitem__(self, idx):
-        raise(NotImplementedError)
     
     
-class ManiSkillrgbSeqDataset(ManiSkillDataset):
+class LiberoDataset:
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
     def __init__(self, method: str, dataset_file: str, indices: list,
@@ -129,7 +110,6 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         self.method = method
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
         self.json_data = load_json(json_path)
         self.episodes = self.json_data["episodes"]
         self.env_info = self.json_data["env_info"]

@@ -27,7 +27,8 @@ from mani_skill2.utils.wrappers import RecordEpisode
 from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
-from policy.dataset.ms2dataset import get_MS_loaders, convert_observation, get_dec_ar_masks, rescale_rgbd, get_plan_ar_masks
+from policy.dataset.ms2dataset import get_MS_loaders, convert_observation, rescale_rgbd
+from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks
 from policy.checkpoints import CheckpointIO
 from policy.skill.skill_vae import TSkillCVAE
 from policy.planning.skill_plan import TSkillPlan
