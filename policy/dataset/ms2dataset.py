@@ -13,7 +13,7 @@ from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.common import flatten_state_dict
 import h5py
 import dill as pickle
-from policy.dataset.data_utils import ScalingFunction, DataAugmentation
+from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data
 from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks, get_plan_ar_masks, get_skill_pad_from_seq_pad
 
 def tensor_to_numpy(x):
@@ -23,27 +23,20 @@ def tensor_to_numpy(x):
     return x
 
 
-def convert_observation(observation, robot_state_only, pos_only=True):
+def convert_observation(observation, pos_only=True):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
     # we provide a simple tool to flatten dictionaries with state data
-    if robot_state_only:
-        if pos_only:
-            state = observation["agent"]["qpos"]
-        else:
-            state = np.hstack(
-            [
-                observation["agent"]["qpos"],
-                observation["agent"]["qvel"],
-            ]
-        )
+    if pos_only:
+        state = observation["agent"]["qpos"]
     else:
         state = np.hstack(
-            [
-                flatten_state_dict(observation["agent"]),
-                flatten_state_dict(observation["extra"]),
-            ]
-        )
+        [
+            observation["agent"]["qpos"],
+            observation["agent"]["qvel"],
+        ]
+    )
+            
     obs = dict(state=state)
 
     # image data is not scaled here and is kept as uint16 to save space
@@ -85,38 +78,8 @@ def rescale_rgbd(rgbd, scale_rgb_only=False, discard_depth=False,
 
     return rgbd
 
-
-# loads h5 data into memory for faster access
-def load_h5_data(data):
-    out = dict()
-    for k in data.keys():
-        if isinstance(data[k], h5py.Dataset):
-            out[k] = data[k][:]
-        else:
-            out[k] = load_h5_data(data[k])
-    return out
-
-
-class ManiSkillDataset(Dataset):
-    def __init__(self, dataset_file: str, indices: list) -> None:
-        self.dataset_file = dataset_file
-        self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices
     
-    def __len__(self):
-        raise(NotImplementedError)
-    
-    def __getitem__(self, idx):
-        raise(NotImplementedError)
-    
-    
-class ManiSkillrgbSeqDataset(ManiSkillDataset):
+class ManiSkillrgbSeqDataset:
     """Class that organizes maniskill demo dataset into distinct rgb sequences
     for each episode"""
     def __init__(self, method: str, dataset_file: str, indices: list,
@@ -174,7 +137,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
         trajectory = load_h5_data(trajectory)
 
         # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+        obs = convert_observation(trajectory["obs"], pos_only=False)
         
         # we use :-1 to ignore the last obs as terminal observations are included
         # and they don't have actions
@@ -269,7 +232,7 @@ class ManiSkillrgbSeqDataset(ManiSkillDataset):
             data["plan_src_mask"] = plan_src_mask
             data["plan_mem_mask"] = plan_mem_mask
 
-        # Add extra dimension for batch size as model expects this.
+        # Add extra dimension for batch size if not using dataloader as model expects this.
         if self.add_batch_dim:
             for k,v in data.items():
                 data[k] = v.unsqueeze(0)
@@ -389,7 +352,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 eps = episodes[idx]
                 trajectory = data[f"traj_{eps['episode_id']}"]
                 trajectory = load_h5_data(trajectory)
-                obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+                obs = convert_observation(trajectory["obs"], pos_only=False)
                 actions = torch.from_numpy(trajectory["actions"]).float()
                 states = torch.from_numpy(obs["state"][:-1]).float()
                 train_acts.append(actions)
@@ -426,7 +389,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                     eps = episodes[idx]
                     trajectory = data[f"traj_{eps['episode_id']}"]
                     trajectory = load_h5_data(trajectory)
-                    obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+                    obs = convert_observation(trajectory["obs"], pos_only=False)
                     actions = torch.from_numpy(trajectory["actions"]).float()
                     seq_size = actions.shape[0]
                     val_lengths.append(seq_size)

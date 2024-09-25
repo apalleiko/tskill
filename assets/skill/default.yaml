@@ -1,11 +1,12 @@
 method: skill
 notes:
 data:
+  mode: libero
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
   val_split: .1
   preshuffle: False
   max_seq_len: 200
-  action_scaling: normal
+  action_scaling: 1
   state_scaling: 1
   gripper_scaling: False
   augment: False
@@ -50,10 +51,10 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weights: .1
+  kl_weights: .001
 
 training:
-  out_dir: out/PegInsertion/VAE/065
+  out_dir: out/PegInsertion/VAE/001
   max_it: 1
   batch_size: 2
   batch_size_val: 2

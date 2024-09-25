@@ -1,0 +1,95 @@
+from torch.utils.data import Dataset
+import numpy as np
+import os
+import copy
+import dill as pickle
+
+from policy.dataset.LIBEROdataset import get_LIBERO_loaders
+from policy.dataset.ms2dataset import get_MS_loaders
+
+
+class MultitaskDataset(Dataset):
+    def __init__(self, sequence_datasets):
+        self.sequence_datasets = sequence_datasets
+        # self.task_embs = task_embs
+        self.group_size = len(sequence_datasets)
+        self.lengths = [len(x) for x in self.sequence_datasets]
+        self.task_group_size = len(self.sequence_datasets)
+
+        # create a map that maps the current idx of dataloader to original task data idx
+        # imagine we have task 1,2,3, with sizes 3,5,4, then the idx looks like
+        # task-1  task-2  task-3
+        #   0       1       2
+        #   3       4       5
+        #   6       7       8
+        #           9       10
+        #           11
+        # by doing so, when we concat the dataset, every task will have equal number of demos
+        
+        self.map_dict = {}
+        sizes = np.array(self.lengths)
+        row = 0
+        col = 0
+        for i in range(sum(sizes)):
+            while sizes[col] == 0:
+                col = col + 1
+                if col >= self.task_group_size:
+                    col -= self.task_group_size
+                    row += 1
+            self.map_dict[i] = (row, col)
+            sizes[col] -= 1
+            col += 1
+            if col >= self.task_group_size:
+                col -= self.task_group_size
+                row += 1
+        self.n_total = sum(self.lengths)
+
+    def __len__(self):
+        return self.n_total
+
+    def __get_original_task_idx(self, idx):
+        return self.map_dict[idx]
+
+    def __getitem__(self, idx):
+        oi, oti = self.__get_original_task_idx(idx)
+        return_dict = self.sequence_datasets[oti].__getitem__(oi)
+        # return_dict["task_emb"] = self.task_embs[oti]
+        return return_dict
+    
+
+def get_multitask_dataset(cfg, **kwargs):
+    mode = cfg["data"]["mode"]
+    if mode == "libero":
+        loader = get_LIBERO_loaders
+    elif mode == "maniskill":
+        loader = get_MS_loaders
+    else:
+        raise ValueError("Unrecognized data mode passed")
+    
+    dataset = cfg["data"]["dataset"]
+    train_sequence_datasets = []
+    val_sequence_datasets = []
+
+    # Try loading existing data config info pickle file
+    path = os.path.join(cfg["training"]["out_dir"],'data_info.pickle')
+    try:
+        with open(path,'rb') as f:
+            data_info = pickle.load(f)
+        print("Found existing data info file")
+    except FileNotFoundError:
+        data_info = dict()
+
+    if isinstance(dataset, (list,tuple)):
+        dataset_list = dataset
+    elif os.path.isdir(dataset):
+        dataset_list = os.listdir(dataset)
+        dataset_list = [os.path.join(dataset, f) for f in dataset_list]
+
+    for i in dataset_list:
+        cfg_i = copy.deepcopy(cfg)
+        cfg_i["data"]["dataset"] = i
+        train_i, val_i = loader(cfg_i, **kwargs)
+        train_sequence_datasets.append(train_i)
+        val_sequence_datasets.append(val_i)
+
+    return train_sequence_datasets, val_sequence_datasets

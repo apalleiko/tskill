@@ -13,7 +13,7 @@ from mani_skill2.utils.io_utils import load_json
 from mani_skill2.utils.common import flatten_state_dict
 import h5py
 import dill as pickle
-from policy.dataset.data_utils import ScalingFunction, DataAugmentation
+from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data
 from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks, get_plan_ar_masks, get_skill_pad_from_seq_pad
 
 def tensor_to_numpy(x):
@@ -23,82 +23,43 @@ def tensor_to_numpy(x):
     return x
 
 
-def convert_observation(observation, robot_state_only, pos_only=True):
+def convert_observation(observation):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
     # we provide a simple tool to flatten dictionaries with state data
-    if robot_state_only:
-        if pos_only:
-            state = observation["agent"]["qpos"]
-        else:
-            state = np.hstack(
-            [
-                observation["agent"]["qpos"],
-                observation["agent"]["qvel"],
-            ]
-        )
-    else:
-        state = np.hstack(
-            [
-                flatten_state_dict(observation["agent"]),
-                flatten_state_dict(observation["extra"]),
-            ]
-        )
+    state = np.hstack(
+            [observation["joint_states"],
+             observation["gripper_states"]])
     obs = dict(state=state)
 
     # image data is not scaled here and is kept as uint16 to save space
-    if "image" in observation.keys():
-        image_obs = observation["image"]
-        cams = []
-        # combine the RGB and depth images
-        for c in image_obs.keys():
-            cams.append(image_obs[c]["rgb"])
-            cams.append(image_obs[c]["depth"])
+    cams = []
+    # combine the RGB and depth images
+    cams.append(observation["agentview_rgb"][:,::-1,:])
+    cams.append(observation["eye_in_hand_rgb"])
 
-        rgbd = np.concatenate(cams, axis=-1)
-        obs["rgbd"] = rgbd
+    rgb = np.concatenate(cams, axis=-1)
+    obs["rgb"] = rgb
         
     return obs
 
 
-def rescale_rgbd(rgbd, scale_rgb_only=False, discard_depth=False,
-                 separate_cams=False):
+def rescale_rgbd(rgbd, separate_cams=False):
     # rescales rgbd data and changes them to floats
     rgbs = []
-    depths = []
-    for i in range(int(rgbd.shape[-1]/4)):
-        rgbs.append(rgbd[..., 4*i:4*i+3] / 255.0)
-        depths.append(rgbd[..., 4*i+3:4*i+4])
-    if not scale_rgb_only:
-        depths = [d / (2**10) for d in depths]
+    for i in range(int(rgbd.shape[-1]/3)):
+        rgbs.append(rgbd[..., 3*i:3*i+3] / 255.0)
     
-    if discard_depth:
-        if separate_cams:
-            rgbd = np.stack(rgbs, axis=-1)
-        else:
-            rgbd = np.concatenate(rgbs, axis=-1)
+    if separate_cams:
+        rgbd = np.stack(rgbs, axis=-1)
     else:
-        if separate_cams:
-            rgbd = np.stack([np.concatenate([rgbs[i], depths[i]], axis=-1) for i in range(len(rgbs))], axis=-1)
-        else:
-            rgbd = np.concatenate([np.concatenate([rgbs[i], depths[i]], axis=-1) for i in range(len(rgbs))], axis=-1)
-
+        rgbd = np.concatenate(rgbs, axis=-1)
+ 
     return rgbd
-
-
-# loads h5 data into memory for faster access
-def load_h5_data(data):
-    out = dict()
-    for k in data.keys():
-        if isinstance(data[k], h5py.Dataset):
-            out[k] = data[k][:]
-        else:
-            out[k] = load_h5_data(data[k])
-    return out
     
     
 class LiberoDataset:
-    """Class that organizes maniskill demo dataset into distinct rgb sequences
+    """Class that organizes a single libero demo dataset into distinct rgb sequences
     for each episode"""
     def __init__(self, method: str, dataset_file: str, indices: list,
                  max_seq_len: int = 200, max_skill_len: int = 10, 
@@ -110,11 +71,7 @@ class LiberoDataset:
         self.method = method
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
+        self.episodes = self.data["data"]
         self.owned_indices = indices
         self.max_seq_len = max_seq_len
         self.max_skill_len = max_skill_len
@@ -141,25 +98,23 @@ class LiberoDataset:
 
     def __getitem__(self, idx):
         if not self.full_seq:
-            eps = self.episodes[self.owned_indices[idx]]
+            eps = self.owned_indices[idx]
             i0 = 0
         else:
             mp = self.owned_indices[idx]
-            eps = self.episodes[mp[0]]
+            eps = mp[0]
             i0 = mp[1]
 
         data = dict()
 
-        trajectory = self.data[f"traj_{eps['episode_id']}"]
+        trajectory = self.episodes[f"demo_{eps}"]
         trajectory = load_h5_data(trajectory)
 
         # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+        obs = convert_observation(trajectory["obs"])
         
-        # we use :-1 to ignore the last obs as terminal observations are included
-        # and they don't have actions
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
-        state = self.state_scaling(torch.from_numpy(obs["state"][:-1])[i0:,:].float()) # (seq, state_dim)
+        state = self.state_scaling(torch.from_numpy(obs["state"])[i0:,:].float()) # (seq, state_dim)
 
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
@@ -169,8 +124,7 @@ class LiberoDataset:
             num_feats = img_feat.shape[2]
         else:
             use_precalc = False
-            rgbd = obs["rgbd"][:-1]
-            rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
+            rgb = rescale_rgbd(obs["rgb"], separate_cams=True)
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
             num_cam = rgb.shape[1]
             num_feats = 16 # HARDCODED
@@ -257,7 +211,7 @@ class LiberoDataset:
         return data
 
 
-def get_MS_loaders(cfg,  **kwargs) -> None:
+def get_LIBERO_loaders(cfg,  **kwargs) -> None:
         method = cfg["method"]
         if method == "plan":
             cfg_model_vae = cfg["vae_cfg"]["model"]
@@ -286,14 +240,10 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         recompute_fullseq = False # Whether recomputing full sequence data map is needed
         save_override = kwargs.get("save_override", False)
         fullseq_override = kwargs.get("fullseq_override", False)
-        recalc_override = kwargs.get("recalc_override", False)
-        # recalc_override = True
 
         assert osp.exists(dataset_file)
         data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        json_data = load_json(json_path)
-        episodes = json_data["episodes"]
+        episodes = data["data"]
 
         # Try loading existing data config info pickle file
         path = os.path.join(cfg["training"]["out_dir"],'data_info.pickle')
@@ -305,16 +255,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             data_info = dict()
 
         # Try loading existing train/val split indices
-        override_indices = kwargs.get("indices", None)
-        if not recalc_override and override_indices is not None:
-            print("Using override indices")
-            train_mapping, val_mapping = override_indices
-            if all([i in data_info.keys() for i in ("action_scaling", "state_scaling")]):
-                print("Loading action and state scaling from file")
-                act_scaling = data_info["action_scaling"]
-                stt_scaling = data_info["state_scaling"]
-                # recompute_scaling = False
-        elif not recalc_override and all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
+        if all([i in data_info.keys() for i in ("train_indices", "val_indices")]):
             print(f"Loading indices from file: {path}")
             if fullseq_override:
                 print("Overriding full seq config!")
@@ -366,12 +307,11 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             train_lengths = []
             for i in tqdm(range(len(train_idx)), "Collecting all training data info:"):
                 idx = train_idx[i]
-                eps = episodes[idx]
-                trajectory = data[f"traj_{eps['episode_id']}"]
+                trajectory = episodes[f"demo_{idx}"]
                 trajectory = load_h5_data(trajectory)
-                obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+                obs = convert_observation(trajectory["obs"])
                 actions = torch.from_numpy(trajectory["actions"]).float()
-                states = torch.from_numpy(obs["state"][:-1]).float()
+                states = torch.from_numpy(obs["state"]).float()
                 train_acts.append(actions)
                 train_states.append(states)
                 seq_size = actions.shape[0]
@@ -402,11 +342,10 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                 print("Computing full sequence mapping...")
                 val_lengths = []
                 for i in tqdm(range(len(val_idx)), "Collecting all val data info:"):
-                    idx = val_idx[i]
-                    eps = episodes[idx]
-                    trajectory = data[f"traj_{eps['episode_id']}"]
+                    idx = train_idx[i]
+                    trajectory = episodes[f"demo_{idx}"]
                     trajectory = load_h5_data(trajectory)
-                    obs = convert_observation(trajectory["obs"], robot_state_only=True, pos_only=False)
+                    obs = convert_observation(trajectory["obs"])
                     actions = torch.from_numpy(trajectory["actions"]).float()
                     seq_size = actions.shape[0]
                     val_lengths.append(seq_size)
@@ -444,18 +383,18 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             print("Adding batch dimension to returned data!")
 
         # Create datasets
-        train_dataset = ManiSkillrgbSeqDataset(method, dataset_file, train_mapping, 
-                                               max_seq_len, max_skill_len,
-                                               pad, train_augmentation,
-                                               act_scaling, stt_scaling,
-                                               full_seq, autoregressive_decode, encoder_is_causal,
-                                               add_batch_dim=add_batch_dim)
-        val_dataset = ManiSkillrgbSeqDataset(method, dataset_file, val_mapping, 
-                                             max_seq_len, max_skill_len,
-                                             pad, None,
-                                             act_scaling, stt_scaling,
-                                             full_seq, autoregressive_decode, encoder_is_causal,
-                                             add_batch_dim=add_batch_dim)
+        train_dataset = LiberoDataset(method, dataset_file, train_mapping, 
+                                                max_seq_len, max_skill_len,
+                                                pad, train_augmentation,
+                                                act_scaling, stt_scaling,
+                                                full_seq, autoregressive_decode, encoder_is_causal,
+                                                add_batch_dim=add_batch_dim)
+        val_dataset = LiberoDataset(method, dataset_file, val_mapping, 
+                                            max_seq_len, max_skill_len,
+                                            pad, None,
+                                            act_scaling, stt_scaling,
+                                            full_seq, autoregressive_decode, encoder_is_causal,
+                                            add_batch_dim=add_batch_dim)
 
         if return_dataset:
             return train_dataset, val_dataset
@@ -471,8 +410,3 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
                                  pin_memory=True, drop_last=True, shuffle=shuffle)
         
         return train_loader, val_loader
-
-
-### Commands for trajectory replay ###
-# python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10
-# python -m policy/dataset/replay_trajectory.py --traj-path data/demos/v0/rigid_body/StackCube-v0/trajectory.h5 --save-traj --obs-mode rgbd --target-control-mode pd_joint_delta_pos --num-procs 2 --cam-res 480

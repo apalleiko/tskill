@@ -1,6 +1,18 @@
 import torch
 import sklearn.preprocessing as skp
 from torchvision.transforms import v2
+import h5py
+
+# loads h5 data into memory for faster access
+def load_h5_data(data):
+    out = dict()
+    for k in data.keys():
+        if isinstance(data[k], h5py.Dataset):
+            out[k] = data[k][:]
+        else:
+            out[k] = load_h5_data(data[k])
+    return out
+
 
 class ScalingFunction:
     def __init__(self, scaling, data, sep_idx=None) -> None:
