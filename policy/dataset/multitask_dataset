@@ -4,9 +4,7 @@ import os
 import copy
 import dill as pickle
 
-from policy.dataset.LIBEROdataset import get_LIBERO_loaders
-from policy.dataset.ms2dataset import get_MS_loaders
-
+from policy.dataset.dataset_loader import dataset_loader
 
 class MultitaskDataset(Dataset):
     def __init__(self, sequence_datasets):
@@ -57,15 +55,8 @@ class MultitaskDataset(Dataset):
         return return_dict
     
 
-def get_multitask_dataset(cfg, **kwargs):
-    mode = cfg["data"]["mode"]
-    if mode == "libero":
-        loader = get_LIBERO_loaders
-    elif mode == "maniskill":
-        loader = get_MS_loaders
-    else:
-        raise ValueError("Unrecognized data mode passed")
-    
+def multitask_dataset_loader(cfg, **kwargs):
+
     dataset = cfg["data"]["dataset"]
     train_sequence_datasets = []
     val_sequence_datasets = []

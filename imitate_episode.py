@@ -27,7 +27,8 @@ from mani_skill2.utils.wrappers import RecordEpisode
 from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
-from policy.dataset.ms2dataset import get_MS_loaders, convert_observation, rescale_rgbd
+from policy.dataset.ms2dataset import convert_observation, rescale_rgbd
+from policy.dataset.dataset_loader import dataset_loader
 from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks
 from policy.checkpoints import CheckpointIO
 from policy.skill.skill_vae import TSkillCVAE
@@ -173,7 +174,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
         train_idx, val_idx = data_info["train_indices"], data_info["val_indices"]
     else:
         train_idx, val_idx = data_info["train_ep_indices"], data_info["val_ep_indices"]
-    train_dataset, val_dataset = get_MS_loaders(cfg, return_datasets=True, 
+    train_dataset, val_dataset = dataset_loader(cfg, return_datasets=True, 
                                                 fullseq_override=True)
     
     if not args.train:
@@ -391,7 +392,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
                     
                     # Obtain observation data in the proper form
-                    o = convert_observation(obs, robot_state_only=True, pos_only=False)
+                    o = convert_observation(obs, pos_only=False)
                     # State
                     state = dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
                     state_plan = state[:,:,:model.state_dim]
@@ -497,11 +498,11 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                             dec_tgt = vae.dec_tgt_start_token # (bs, MSL|<, act_dim)
                             dec_img_srcs = img_src
                             dec_img_pes = img_pe
-                            dec_states = state
+                            dec_states = state2
                         else:
                             dec_img_srcs = torch.cat((dec_img_srcs, img_src), dim=0)
                             dec_img_pes = torch.cat((dec_img_pes, img_pe), dim=0)
-                            dec_states = torch.cat((dec_states, state), dim=1)
+                            dec_states = torch.cat((dec_states, state2), dim=1)
 
                         num_actions = dec_tgt.shape[1]
                         dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, dec_tgt.shape[1])

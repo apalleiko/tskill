@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from policy import config
 from policy.checkpoints import CheckpointIO
-from policy.dataset.ms2dataset import get_MS_loaders
+from policy.dataset.dataset_loader import dataset_loader
 from policy.training import BaseTrainer as Trainer
 # from policy.simulation_loss import SimLoss
 
@@ -164,7 +164,7 @@ def main(args):
     shutil.copyfile(user_cfg_path, os.path.join(out_dir, "config.yaml"))
 
     # Dataset
-    train_loader, val_loader = get_MS_loaders(cfg)
+    train_loader, val_loader = dataset_loader(cfg)
     train_dataset, val_dataset = train_loader.dataset, val_loader.dataset
     print("Train Size: ",len(train_loader),"\n","Val Size: ",len(val_loader))
 
