@@ -7,6 +7,7 @@ from mani_skill2.utils.io_utils import load_json
 from policy.dataset.data_utils import load_h5_data
 from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks, get_plan_ar_masks, get_skill_pad_from_seq_pad
 
+
 def tensor_to_numpy(x):
     # moves all tensors to numpy. This is just for SB3 as SB3 does not optimize for observations stored on the GPU.
     if torch.is_tensor(x):

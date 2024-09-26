@@ -1,10 +1,6 @@
 from torch.utils.data import Dataset
 import numpy as np
-import os
-import copy
-import dill as pickle
 
-from policy.dataset.dataset_loader import dataset_loader
 
 class MultitaskDataset(Dataset):
     def __init__(self, sequence_datasets):
@@ -53,34 +49,3 @@ class MultitaskDataset(Dataset):
         return_dict = self.sequence_datasets[oti].__getitem__(oi)
         # return_dict["task_emb"] = self.task_embs[oti]
         return return_dict
-    
-
-def multitask_dataset_loader(cfg, **kwargs):
-
-    dataset = cfg["data"]["dataset"]
-    train_sequence_datasets = []
-    val_sequence_datasets = []
-
-    # Try loading existing data config info pickle file
-    path = os.path.join(cfg["training"]["out_dir"],'data_info.pickle')
-    try:
-        with open(path,'rb') as f:
-            data_info = pickle.load(f)
-        print("Found existing data info file")
-    except FileNotFoundError:
-        data_info = dict()
-
-    if isinstance(dataset, (list,tuple)):
-        dataset_list = dataset
-    elif os.path.isdir(dataset):
-        dataset_list = os.listdir(dataset)
-        dataset_list = [os.path.join(dataset, f) for f in dataset_list]
-
-    for i in dataset_list:
-        cfg_i = copy.deepcopy(cfg)
-        cfg_i["data"]["dataset"] = i
-        train_i, val_i = loader(cfg_i, **kwargs)
-        train_sequence_datasets.append(train_i)
-        val_sequence_datasets.append(val_i)
-
-    return train_sequence_datasets, val_sequence_datasets

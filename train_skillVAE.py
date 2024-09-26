@@ -15,7 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from policy import config
 from policy.checkpoints import CheckpointIO
-from policy.dataset.dataset_loader import dataset_loader
+from policy.dataset.dataset_loaders import dataset_loader
 from policy.training import BaseTrainer as Trainer
 # from policy.simulation_loss import SimLoss
 

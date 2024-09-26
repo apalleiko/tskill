@@ -28,7 +28,7 @@ from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
 from policy.dataset.ms2dataset import convert_observation, rescale_rgbd
-from policy.dataset.dataset_loader import dataset_loader
+from policy.dataset.dataset_loaders import dataset_loader
 from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks
 from policy.checkpoints import CheckpointIO
 from policy.skill.skill_vae import TSkillCVAE
