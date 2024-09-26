@@ -56,9 +56,9 @@ def get_model(cfg, device=None):
         z_dim=cfg_model["z_dim"],
         conditional_decode=cond_dec,
         autoregressive_decode=ar_dec,
-        device=device,
         encode_state=encode_state,
-        encoder_is_causal=encoder_is_causal
+        encoder_is_causal=encoder_is_causal,
+        device=device
     )
 
     return model

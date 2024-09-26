@@ -6,6 +6,7 @@ import IPython
 e = IPython.embed
 import dill as pickle
 from policy.skill.skill_vae import TSkillCVAE
+from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks, get_skill_pad_from_seq_pad
 
 
 def get_sinusoid_encoding_table(n_position, d_hid):
@@ -21,8 +22,9 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class TSkillPlan(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
-    def __init__(self, transformer: torch.nn.Transformer, vae: TSkillCVAE, 
-                 conditional_plan, distance_metric,
+    def __init__(self, transformer: torch.nn.Transformer, 
+                 vae: TSkillCVAE, 
+                 conditional_plan,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -34,7 +36,6 @@ class TSkillPlan(nn.Module):
         ### General args
         self.transformer = transformer
         self.conditional_plan = conditional_plan
-        self.distance_metric = distance_metric
         self.hidden_dim = transformer.d_model
         self.vae = vae
         self.z_dim = self.vae.z_dim
@@ -56,9 +57,9 @@ class TSkillPlan(nn.Module):
 
         ### Backbone
         self.stt_encoder = self.vae.stt_encoder
-        num_img_feats = 16 # Hardcoded
+        self.num_img_feats = 16 # Hardcoded
         self.image_proj = nn.Linear(self.stt_encoder.num_channels, self.hidden_dim)
-        self.image_feat_norm = self.norm([num_img_feats, self.hidden_dim])
+        self.image_feat_norm = self.norm([self.num_img_feats, self.hidden_dim])
 
         ### Inputs
         self.src_state_proj = nn.Linear(self.state_dim, self.hidden_dim)  # project qpos -> hidden
@@ -97,15 +98,7 @@ class TSkillPlan(nn.Module):
         if is_training:
             seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
-        bs, MNS = skill_pad_mask.shape
-
-        ### Get autoregressive masks, if applicable
-        if self.vae.autoregressive_decode and is_training:
-            dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
-            dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
-            dec_tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
-        else:
-            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
+        BS, MNS = skill_pad_mask.shape
 
         ### Image calculation or features
         use_precalc = kwargs.get("use_precalc",False)
@@ -124,19 +117,24 @@ class TSkillPlan(nn.Module):
             goal = data["goal"].to(self._device)
             goal_src, goal_pe = self.stt_encoder(goal)
 
+        num_cam = img_src.shape[2]
+
+        ### Get autoregressive masks, if applicable
+        if self.vae.autoregressive_decode and is_training:
+            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(self.num_img_feats*num_cam, self.max_skill_len, device=self._device)
+        else:
+            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
+
         ### Get conditional planning masks if applicable
         if self.conditional_plan:
-            plan_src_mask = data["plan_src_mask"][0,...].to(self._device)
-            plan_mem_mask = data["plan_mem_mask"][0,...].to(self._device)
-            plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
-            # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
-            if is_training:
+            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, device=self._device)
+            if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
                 qpos_plan = qpos_plan[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
                 img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
             goal_info = (goal_src, goal_pe)
         else:
             plan_src_mask = plan_mem_mask = None
-            plan_tgt_mask = data["plan_tgt_mask"][0,...].to(self._device)
+            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS)
             qpos_plan = qpos_plan[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
@@ -150,7 +148,7 @@ class TSkillPlan(nn.Module):
             vae_out = self.vae(data, use_precalc=use_precalc)
             
             # Create tgt shifted right 1 token
-            z_tgt0 = self.tgt_start_token.repeat(1,bs,1)
+            z_tgt0 = self.tgt_start_token.repeat(1,BS,1)
             z_tgt = vae_out["mu"].permute(1,0,2) # (skill_seq, bs, z_dim)
             if sep_vae_grad: # Turn off vae grad calculation for planning z
                 z_tgt = z_tgt.clone().detach()

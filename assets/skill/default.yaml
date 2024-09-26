@@ -1,7 +1,7 @@
 method: skill
 notes:
 data:
-  mode:
+  mode: maniskill
   dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
   val_split: .1
   preshuffle: False
@@ -54,7 +54,7 @@ loss:
   kl_weights: .0001
 
 training:
-  out_dir: out/PegInsertion/VAE/002
+  out_dir: out/PegInsertion/VAE/003
   max_it: 1
   batch_size: 2
   batch_size_val: 2

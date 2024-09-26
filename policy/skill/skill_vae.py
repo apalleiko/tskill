@@ -7,6 +7,7 @@ import numpy as np
 import IPython
 e = IPython.embed
 import dill as pickle
+from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks, get_skill_pad_from_seq_pad
 
 
 def reparametrize(mu, logvar):
@@ -34,6 +35,8 @@ class TSkillCVAE(nn.Module):
                  max_skill_len, z_dim,
                  conditional_decode,
                  autoregressive_decode,
+                 encode_state,
+                 encoder_is_causal,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
@@ -64,8 +67,8 @@ class TSkillCVAE(nn.Module):
         self.norm = nn.LayerNorm
         self.conditional_decode = conditional_decode
         self.autoregressive_decode = autoregressive_decode
-        self.encode_state = kwargs.get("encode_state")
-        self.encoder_is_causal = kwargs.get("encoder_is_causal")
+        self.encode_state = encode_state
+        self.encoder_is_causal = encoder_is_causal
 
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
@@ -138,25 +141,9 @@ class TSkillCVAE(nn.Module):
         actions = data["actions"].to(self._device)
         seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
-        enc_src_mask = data.get("enc_src_mask", None)
-        ### Get causal/other masks, if applicable
-        # Encoder causal or normal mask
-        if enc_src_mask is not None: # Reshape masks based on number of transformer heads: (N,S,S) -> (N*nhead,S,S)
-            enc_src_mask = enc_src_mask.to(self._device, torch.bool)
-            enc_src_mask = torch.cat([enc_src_mask[i:i+1,:,:].repeat(self.encoder.nhead,1,1) for i in range(enc_src_mask.shape[0])])
-        # Encoder causal masks
-        if self.encoder_is_causal:
-            enc_mem_mask = data["enc_mem_mask"][0,...].to(self._device)
-            enc_tgt_mask = data["enc_tgt_mask"][0,...].to(self._device)
-        else:
-            enc_mem_mask = enc_tgt_mask = None
-        # Decoder ar masks
-        if self.autoregressive_decode:
-            dec_src_mask = data["dec_src_mask"][0,...].to(self._device)
-            dec_mem_mask = data["dec_mem_mask"][0,...].to(self._device)
-            dec_tgt_mask = data["dec_tgt_mask"][0,...].to(self._device)
-        else:
-            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
+
+        BS, SEQ = seq_pad_mask.shape
+        _, MNS = skill_pad_mask.shape
 
         ### Calculate image features or use precalculated from dataset
         use_precalc = kwargs.get("use_precalc",False)
@@ -166,6 +153,20 @@ class TSkillCVAE(nn.Module):
         else:
             images = data["rgb"].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
+        
+        num_cam = img_src.shape[2]
+
+        ### Get causal/other masks, if applicable
+        # Encoder causal masks
+        if self.encoder_is_causal:
+            enc_src_mask, enc_mem_mask, enc_tgt_mask = get_enc_causal_masks(SEQ, MNS, self.max_skill_len, device=self._device)
+        else:
+            enc_src_mask, enc_mem_mask = enc_tgt_mask = None
+        # Decoder ar masks
+        if self.autoregressive_decode:
+            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(self.num_img_feats*num_cam, self.max_skill_len, device=self._device)
+        else:
+            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
 
         ### Encode inputs to latent
         mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
@@ -243,7 +244,7 @@ class TSkillCVAE(nn.Module):
             # Repeat same padding mask for new seq length (same pattern)
             src_pad_mask = src_pad_mask.repeat(1,(2+num_cam)) # (bs, (2+num_cam)*seq)
             if src_mask is not None:
-                src_mask = src_mask.repeat(1, (2+num_cam), (2+num_cam)) # (bs*nhead, (2+num_cam)*seq, (2+num_cam)*seq)
+                src_mask = src_mask.repeat((2+num_cam), (2+num_cam)) # (bs*nhead, (2+num_cam)*seq, (2+num_cam)*seq)
             if mem_mask is not None:
                 mem_mask = mem_mask.repeat(1, (2+num_cam)) # (skill_seq, (2+num_cam)*seq)
         else:

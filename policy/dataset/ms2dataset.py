@@ -199,31 +199,6 @@ class ManiSkillrgbSeqDataset(Dataset):
         if self.augmentation is not None:
             data = self.augmentation(data)
 
-        # Generate autoregressive masks for vae decoder if applicable
-        if self.generate_dec_ar_masks:
-            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, self.max_skill_len)
-            data["dec_src_mask"] = dec_src_mask
-            data["dec_mem_mask"] = dec_mem_mask
-            data["dec_tgt_mask"] = dec_tgt_mask
-
-        # Create causal masks for vae encoder if applicable
-        if self.generate_enc_causal_masks:
-            enc_causal_mask, enc_mem_mask, enc_tgt_mask = get_enc_causal_masks(self.max_seq_len, self.max_num_skills, self.max_skill_len)
-            # Merge with existing masks if applicable
-            if "enc_src_mask" in data.keys():
-                data["enc_src_mask"] = data["enc_src_mask"] | enc_causal_mask
-            else:
-                data["enc_src_mask"] = enc_causal_mask
-            data["enc_mem_mask"] = enc_mem_mask
-            data["enc_tgt_mask"] = enc_tgt_mask
-
-        # Create autoregressive masks for skill planner
-        if self.method == "plan":
-            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, self.max_num_skills)
-            data["plan_tgt_mask"] = plan_tgt_mask
-            data["plan_src_mask"] = plan_src_mask
-            data["plan_mem_mask"] = plan_mem_mask
-
         # Add extra dimension for batch size if not using dataloader as model expects this.
         if self.add_batch_dim:
             for k,v in data.items():
