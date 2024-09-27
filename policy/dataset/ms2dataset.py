@@ -100,6 +100,9 @@ class ManiSkillrgbSeqDataset(Dataset):
         self.generate_dec_ar_masks = autoregressive_decode
         self.generate_enc_causal_masks = encoder_is_causal
         self.add_batch_dim = kwargs.get("add_batch_dim",False)
+        self.pad2msl = kwargs.get("pad2msl",False)
+        if self.pad2msl:
+            print("Padding only to a multiple of max_skill_len. Ensure batch size is 1!")
 
         if action_scaling is None:
             self.action_scaling = lambda x: x
@@ -140,15 +143,11 @@ class ManiSkillrgbSeqDataset(Dataset):
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
             img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
-            num_cam = img_feat.shape[1]
-            num_feats = img_feat.shape[2]
         else:
             use_precalc = False
             rgbd = obs["rgbd"][:-1]
             rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
-            num_cam = rgb.shape[1]
-            num_feats = 16 # HARDCODED
 
         if self.method == "plan":
             if use_precalc:
@@ -160,7 +159,10 @@ class ManiSkillrgbSeqDataset(Dataset):
         # Add padding to sequences to match lengths and generate padding masks
         if self.pad:
             num_unpad_seq = actions.shape[0]
-            pad = self.max_seq_len - num_unpad_seq
+            if self.pad2msl:
+                pad = self.max_skill_len - (num_unpad_seq % self.max_skill_len)
+            else:
+                pad = self.max_seq_len - num_unpad_seq
             seq_pad_mask = torch.cat((torch.zeros(actions.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
 
             state_pad = torch.zeros([pad] + list(state.shape[1:]))

@@ -1,12 +1,12 @@
 method: skill
 notes:
 data:
-  mode: maniskill
-  dataset: /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5
+  mode: libero
+  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/KITCHEN_SCENE1_open_the_bottom_drawer_of_the_cabinet_demo.hdf5"
   val_split: .1
   preshuffle: False
-  max_seq_len: 200
-  action_scaling: 1
+  max_seq_len: 330
+  action_scaling: normal
   state_scaling: 1
   gripper_scaling: False
   augment: False
@@ -19,8 +19,8 @@ data:
   full_seq: True
 
 model:
-  state_dim : 18
-  action_dim : 8
+  state_dim : 9 # LIBERO is 9, MS is 18
+  action_dim : 7 # LIBERO is 7, MS is 8
   z_dim : 128
   hidden_dim: 256
   max_skill_len: 10
@@ -51,7 +51,7 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weights: .0001
+  kl_weights: .001
 
 training:
   out_dir: out/PegInsertion/VAE/003

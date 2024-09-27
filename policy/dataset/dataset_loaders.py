@@ -51,6 +51,8 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         encoder_is_causal: bool = cfg_model_vae.get("encoder_is_causal",True) # Whether encoder has causal masks applied
         full_seq: bool = cfg_data.get("full_seq") # Whether to use a mapping for the episodes to start at each timestep
         max_seq_len = cfg_data.get("max_seq_len", 0)
+        batch_size = cfg["training"]["batch_size"]
+        batch_size_val = cfg["training"]["batch_size_val"]
 
         # Scale actions/states, or compute normalization for the dataset
         action_scaling = cfg_vae["data"].get("action_scaling",1)
@@ -245,6 +247,14 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         add_batch_dim = not pad or return_dataset or override_batch_dim
         if add_batch_dim:
             print("Adding batch dimension to returned data!")
+        if batch_size == 1:
+            pad2msl_train = True
+        else:
+            pad2msl_train = False
+        if batch_size_val == 1:
+            pad2msl_val = True
+        else:
+            pad2msl_val = False
 
         ### Create datasets
         if mode == "maniskill":
@@ -257,13 +267,15 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                             pad, train_augmentation,
                             act_scaling, stt_scaling,
                             full_seq, autoregressive_decode, encoder_is_causal,
-                            add_batch_dim=add_batch_dim)
+                            add_batch_dim=add_batch_dim,
+                            pad2msl=pad2msl_train)
         val_dataset = ds(method, dataset_file, val_mapping, 
                             max_seq_len, max_skill_len,
                             pad, None,
                             act_scaling, stt_scaling,
                             full_seq, autoregressive_decode, encoder_is_causal,
-                            add_batch_dim=add_batch_dim)
+                            add_batch_dim=add_batch_dim,
+                            pad2msl=pad2msl_val)
 
         if multitask:
             return train_dataset, val_dataset, data_info
@@ -274,11 +286,11 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         ### Create loaders
         shuffle = kwargs.get("shuffle", True)
         print(f"Shuffling: {shuffle}")
-        train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
+        train_loader =  DataLoader(train_dataset, batch_size=batch_size, 
                                    num_workers=cfg["training"]["n_workers"],
                                    pin_memory=True, drop_last=True, shuffle=shuffle,
                                    )
-        val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
+        val_loader =  DataLoader(val_dataset, batch_size=batch_size_val, 
                                  num_workers=cfg["training"]["n_workers_val"], 
                                  pin_memory=True, drop_last=True, shuffle=shuffle)
         
@@ -293,6 +305,8 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
         cfg_vae = cfg
     cfg_data = cfg["data"]
     mode = cfg_data.get("mode","maniskill")
+    batch_size = cfg["training"]["batch_size"]
+    batch_size_val = cfg["training"]["batch_size_val"]
     dataset_file: str = cfg_data["dataset"]
     max_seq_len = cfg_data.get("max_seq_len", 0)
 
@@ -437,11 +451,13 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     ### Create loaders
     shuffle = kwargs.get("shuffle", True)
     print(f"Shuffling: {shuffle}")
-    train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
+    train_loader =  DataLoader(train_dataset, batch_size=batch_size, 
                                 num_workers=cfg["training"]["n_workers"],
-                                pin_memory=True, drop_last=True, shuffle=shuffle)
-    val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
+                                pin_memory=True, drop_last=True, shuffle=shuffle,
+                                persistent_workers=True)
+    val_loader =  DataLoader(val_dataset, batch_size=batch_size_val,
                                 num_workers=cfg["training"]["n_workers_val"], 
-                                pin_memory=True, drop_last=True, shuffle=shuffle)
+                                pin_memory=True, drop_last=True, shuffle=shuffle,
+                                persistent_workers=True)
     
     return train_loader, val_loader

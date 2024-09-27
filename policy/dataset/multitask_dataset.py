@@ -10,6 +10,9 @@ class MultitaskDataset(Dataset):
         self.lengths = [len(x) for x in self.sequence_datasets]
         self.task_group_size = len(self.sequence_datasets)
 
+        self.action_scaling = sequence_datasets[0].action_scaling
+        self.state_scaling = sequence_datasets[0].state_scaling
+
         # create a map that maps the current idx of dataloader to original task data idx
         # imagine we have task 1,2,3, with sizes 3,5,4, then the idx looks like
         # task-1  task-2  task-3

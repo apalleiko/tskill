@@ -12,6 +12,7 @@ import wandb
 import yaml
 
 from torch.utils.tensorboard import SummaryWriter
+from torch.nn import functional as F
 
 from policy import config
 from policy.checkpoints import CheckpointIO
@@ -114,9 +115,9 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 16
+        cfg["training"]["batch_size"] = 1
         cfg["training"]["batch_size_alt"] = 1
-        cfg["training"]["visualize_every"] = 5
+        cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 20
@@ -235,8 +236,8 @@ def main(args):
         trainer.epoch_step()
         for batch in train_loader:
             it += 1
-            
-            losses, met = trainer.train_step(batch)
+
+            batch_losses, batch_metrics = trainer.train_step(batch)
 
             # Tensorboard model graph
             # if args.debug:
@@ -249,8 +250,13 @@ def main(args):
             #             trace_batch[k] = v[:,0:1,...]
             #     writer.add_graph(model, batch, use_strict_trace=False)
 
-            metrics = {f"train/{k}": v for k, v in losses.items()}
-            metrics.update({f"train/metrics/{k}": v for k, v in met.items() if "vector" not in k})
+            metrics = {f"train/{k}": v for k, v in batch_losses.items()}
+            metrics.update({f"train/metrics/{k}": v for k, v in batch_metrics.items() if "vector" not in k})
+            if "ahat_vector" in batch_metrics.keys():
+                a_hat = train_dataset.action_scaling(batch_metrics["ahat_vector"].cpu(),"inverse")
+                a_targ = train_dataset.action_scaling(batch_metrics["atarg_vector"].cpu(),"inverse")
+                metrics[f"train/metrics/mean_unscaled_plan_joint_error"] = F.l1_loss(a_hat[:,:-1], a_targ[:,:-1], reduction="sum") / (a_hat.shape[0]*(a_hat.shape[1]-1))
+                metrics[f"train/metrics/mean_unscaled_plan_grip_error"] = F.l1_loss(a_hat[:,-1], a_targ[:,-1], reduction="sum") / (a_hat.shape[0]*1)
             if scheduler is not None:
                 metrics.update({"train/metrics/lr": scheduler.get_last_lr()[0]})
             wandb.log(metrics)
@@ -286,7 +292,7 @@ def main(args):
                 print_str += f"time: {t_elapsed}, "
                 print_str += f"eta: {t_eta}, "
 
-                for k, v in losses.items():
+                for k, v in batch_losses.items():
                     if v < 0.001:
                         print_str += f"{k}:{10000*v:.2f}e-4, "
                     else:
@@ -318,7 +324,7 @@ def main(args):
                     if param.grad is not None:
                         writer.add_histogram(f'{name}', param, epoch_it)
                         writer.add_histogram(f'{name}.grad', param.grad, epoch_it)
-                for k,v in met.items():
+                for k,v in batch_metrics.items():
                     if "traj" in k:
                         _,seq,_ = v.shape
                         for i in range(seq):

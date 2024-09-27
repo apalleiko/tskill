@@ -145,15 +145,13 @@ class Trainer(BaseTrainer):
         bs, seq, act_dim = a_targ.shape
         latent_dim = self.model.z_dim
 
-        # Correct mask size and convert to (0,1) where 1 is attended
-        action_loss_mask = seq_pad_mask.unsqueeze(-1).repeat(1, 1, act_dim)
-        action_loss_mask = torch.logical_not(action_loss_mask)
-        num_actions = torch.sum(action_loss_mask.to(torch.int16))
+        # Convert pad mask to (0,1) where 1 is attended
+        action_loss_mask = torch.logical_not(seq_pad_mask)
+        num_actions = torch.sum(action_loss_mask.to(torch.int16)) * act_dim
 
-        # Correct mask size and convert to (0,1) where 1 is attended
-        latent_loss_mask = skill_pad_mask.unsqueeze(-1).repeat(1, 1, latent_dim)
-        latent_loss_mask = torch.logical_not(latent_loss_mask)
-        num_latent = torch.sum(latent_loss_mask.to(torch.int16))
+        # Convert pad mask to (0,1) where 1 is attended
+        latent_loss_mask = torch.logical_not(skill_pad_mask)
+        num_latent = torch.sum(latent_loss_mask.to(torch.int16)) * latent_dim
         
         # Get model outputs
         if alt := kwargs.get("alt",False):
@@ -172,12 +170,12 @@ class Trainer(BaseTrainer):
         logvar = out["vae_out"]["logvar"].to(self.device).detach() # (bs, skill_seq, z_dim)
         std_targ = (logvar / 2).exp()
 
-        # Set target and pred actions to 0 for padded sequence outputs
+        # Get unpadded actions
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
         loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
-        # Set target and pred latents to 0 for padded skill outputs
+        # Get unpadded skills
         z_hat_l = z_hat[latent_loss_mask]
         mu_targ_l = mu_targ[latent_loss_mask]
         std_targ_l = std_targ[latent_loss_mask]
@@ -187,11 +185,13 @@ class Trainer(BaseTrainer):
         loss_dict["z_loss"] = self.z_weight * torch.sum(F.mse_loss(z_hat_l, mu_targ_l, reduction="none") / std_targ_l) / num_latent
 
         metric_dict["aplan_vector_traj"] = a_hat.detach()
+        metric_dict["ahat_vector"] = a_hat_l.detach()
+        metric_dict["atarg_vector"] = a_targ_l.detach()
 
         # Compute some metrics
-        for i in [1,10,50,100]:
-            metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,:-1]).detach()
-            metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / torch.sum(action_loss_mask[:,:i,-1]).detach()
+        for i in [1,50,100]:
+            metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / (num_actions * (act_dim - 1) / act_dim)
+            metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / (num_actions * 1 / act_dim)
 
         if self.train_vae:
             vae_loss_dict, vae_metric_dict = self.vae_trainer.compute_loss(data, out["vae_out"])
