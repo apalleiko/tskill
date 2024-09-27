@@ -289,10 +289,11 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         train_loader =  DataLoader(train_dataset, batch_size=batch_size, 
                                    num_workers=cfg["training"]["n_workers"],
                                    pin_memory=True, drop_last=True, shuffle=shuffle,
-                                   )
+                                   persistent_workers=True)
         val_loader =  DataLoader(val_dataset, batch_size=batch_size_val, 
                                  num_workers=cfg["training"]["n_workers_val"], 
-                                 pin_memory=True, drop_last=True, shuffle=shuffle)
+                                 pin_memory=True, drop_last=True, shuffle=shuffle,
+                                 persistent_workers=True)
         
         return train_loader, val_loader
 

@@ -134,7 +134,7 @@ class TSkillPlan(nn.Module):
             goal_info = (goal_src, goal_pe)
         else:
             plan_src_mask = plan_mem_mask = None
-            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS)
+            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, device=self._device)
             qpos_plan = qpos_plan[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
