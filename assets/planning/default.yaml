@@ -50,7 +50,7 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0
-  lr: 0.00002
+  lr: 0.00003
   lr_decay: 0
   weight_decay: 0.0001
   use_precalc: True

@@ -110,7 +110,7 @@ class LiberoDataset(Dataset):
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         state = self.state_scaling(torch.from_numpy(obs["state"])[i0:,:].float()) # (seq, state_dim)
 
-        if False and "resnet18" in trajectory["obs"].keys():
+        if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
             img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
