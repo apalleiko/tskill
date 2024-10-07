@@ -279,6 +279,59 @@ class TSkillPlan(nn.Module):
         return z
     
 
+    def get_action(self, data, t, replan=False):
+        # Get image features from state encoder
+        img_src, img_pe = self.stt_encoder(data["rgb"])
+        img_src = img_src.transpose(0,1)
+        img_pe = img_pe.transpose(0,1)
+
+        if t==0 or replan:
+            self.execution_data = dict()
+            self.execution_data["t_plan"] = 0
+            self.execution_data["z_tgt"] = self.tgt_start_token
+            self.execution_data["actions"] = None
+
+        # Get next skill prediction if appropriate
+        if self.execution_data["t_plan"] % self.max_skill_len == 0:
+            # Set or update data related to current planning segment
+            if self.execution_data["t_plan"] == 0:
+                self.execution_data["img_feat"] = img_src # (bs, seq, ...)
+                self.execution_data["img_pe"] = img_pe
+                self.execution_data["state"] = data["state"] # (bs, seq, state_dim)
+            else:
+                self.execution_data["img_feat"] = torch.cat((self.execution_data["img_feat"], img_src), dim=1)
+                self.execution_data["img_pe"] = torch.cat((self.execution_data["img_pe"], img_pe), dim=1)
+                self.execution_data["state"] = torch.cat((self.execution_data["state"], data["state"]), dim=1)
+
+            # Set/update data required for model call
+            self.execution_data["skill_pad_mask"] = torch.zeros(1,self.execution_data["z_tgt"].shape[1])
+            if "goal_feat" in data.keys():
+                self.execution_data["goal_feat"] = data["goal_feat"]
+                self.execution_data["goal_pe"] = data["goal_pe"]
+            else:
+                self.execution_data["goal"] = data["goal"]
+
+            with torch.no_grad():
+                out = self.forward(self.execution_data, use_precalc=True)
+
+            z_hat = out["z_hat"]
+            self.execution_data["z_hat"] =  z_hat # (bs, sk, latent)
+            self.execution_data["z_tgt"] = torch.cat((self.execution_data["z_tgt"], z_hat[:,-1:,:]), dim=1)
+
+        # Get current skill
+        t_sk = torch.floor(torch.tensor(self.execution_data["t_plan"]) / self.max_skill_len).to(torch.int)
+        latent = self.execution_data["z_hat"][:,t_sk:t_sk+1,:].permute(1,0,2) # (sk, bs, latent)
+        data["latent"] = latent
+        data["img_feat"] = img_src
+        data["img_pe"] = img_pe
+
+        # Make call to vae skill decoder
+        a_t = self.vae.get_action(data, self.execution_data["t_plan"])
+        self.execution_data["t_plan"] += 1
+        
+        return a_t
+
+
     def to(self, device):
         model = super().to(device)
         model._device = device

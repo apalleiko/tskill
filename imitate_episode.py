@@ -379,8 +379,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
 
                 # Take a zero step to get initial observations
                 obs, _, _, _, info = env.step(ori_actions[0])
-                t_plan = 0
-                z_tgt0 = model.tgt_start_token # (bs, skill_seq, z_dim)
 
                 if pbar is not None:
                     pbar.reset(total=max_episode_steps)
@@ -388,30 +386,7 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     if pbar is not None:
                         pbar.update()
                     
-                    # Current skill based on time since replanning
-                    t_sk = torch.floor(torch.tensor(t_plan) / MSL).to(torch.int)
-                    
-                    # Obtain observation data in the proper form
-                    o = convert_observation(obs, pos_only=False)
-                    # State
-                    state = dataset.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0)
-                    state_plan = state[:,:,:model.state_dim]
-                    state2 = data["state"][:,t:t+1,:]
-                    print(torch.nn.functional.mse_loss(state, state2))
-                    print(state-state2)
-                    # Image
-                    rgbd = o["rgbd"]
-                    rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
-                    img_obs.append(np.hstack((np.vstack((rgb[...,0],rgb[...,1])),
-                                             np.vstack((rgb[...,2],rgb[...,3])))) * 255)
-                    rgb = torch.from_numpy(rgb).float().permute((3, 2, 0, 1)).unsqueeze(0).unsqueeze(0) # (bs, seq, num_cams, channels, img_h, img_w)
-                    img_src, img_pe = model.stt_encoder(rgb) # (seq, bs, num_cam, h*w, c|hidden)
-                    _,_,num_cam,num_feats,_ = img_src.shape
-
-                    dec_skill_pad_mask = torch.zeros(1,1)
-                    current_data = dict()
-                    
-                    # Check for precalc features
+                    current_data = dataset.from_obs(obs)
                     if "goal_feat" in data.keys():
                         current_data["goal_feat"] = data["goal_feat"]
                         current_data["goal_pe"] = data["goal_pe"]
@@ -422,117 +397,18 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                     if method == "plan" and not args.vae:
                         pbar.set_postfix(
                             {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
-                        if model.conditional_plan and (t_plan % model.max_skill_len == 0):
-                            if t==0 or t_plan % args.replan_rate == 0:
-                                t_plan = 0
-                                t_sk = 0
-                                z_tgt = z_tgt0
-                                img_srcs = img_src
-                                img_pes = img_pe
-                                states = state_plan
-                            else:
-                                img_srcs = torch.cat((img_srcs, img_src), dim=0)
-                                img_pes = torch.cat((img_pes, img_pe), dim=0)
-                                states = torch.cat((states, state_plan), dim=1)
-
-                            # Have to trasnpose feat/pe since bs is expected to be first dim
-                            current_data["actions"] = None
-                            current_data["img_feat"] = img_srcs.transpose(0,1)
-                            current_data["img_pe"] = img_pes.transpose(0,1)
-                            current_data["state"] = states
-                            current_data["z_tgt"] = z_tgt
-                            current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[1])
-                        
-                            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, z_tgt.shape[1])
-                            current_data["plan_tgt_mask"] = plan_tgt_mask.unsqueeze(0)
-                            current_data["plan_src_mask"] = plan_src_mask.unsqueeze(0)
-                            current_data["plan_mem_mask"] = plan_mem_mask.unsqueeze(0)
-
-                            # Get current z pred
-                            with torch.no_grad():
-                                out = model(current_data, use_precalc=True)
-
-                            z_hat = out["z_hat"]
-                            z_tgt = torch.cat((z_tgt, z_hat[:,-1:,:]), dim=1)
-                            
-                        elif not model.conditional_plan and t_plan % args.replan_rate == 0:
-                            t_plan = 0
-                            t_sk = 0
-                            z_tgt = z_tgt0
-
-                            current_data["img_feat"] = img_src
-                            current_data["img_pe"] = img_pe
-                            current_data["state"] = state_plan
-                            current_data["actions"] = None
-                            MNS = np.ceil((max_episode_steps-t) / MSL).astype(np.int16)
-                            current_data["z_tgt"] = z_tgt
-
-                            # Get current z pred
-                            for s in range(MNS):
-                                plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(num_feats*num_cam, z_tgt.shape[1])
-                                current_data["plan_tgt_mask"] = plan_tgt_mask.unsqueeze(0)
-                                current_data["skill_pad_mask"] = torch.zeros(1,z_tgt.shape[1])
-                                with torch.no_grad():
-                                    out = model(current_data, use_precalc=True)
-
-                                z_hat = out["z_hat"]
-                                z_tgt = torch.cat((z_tgt, z_hat[:,-1:,:]), dim=1)
-                                current_data["z_tgt"] = z_tgt
-                        
-                        latent = z_hat[:,t_sk:t_sk+1,:].permute(1,0,2)
-
-                    else: # Preplanned
-                        pbar.set_postfix(
-                            {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
-                        t_plan = t
-                        latent = out["latent"] if method != "plan" else out["vae_out"]["latent"]
-                        latent = latent[t_sk:t_sk+1,...]
-
-                    if latent.shape[0] == 0:
-                        print("BREAKING")
-                        break
                     
-                    # Decode latent into actions
-                    if vae.autoregressive_decode:
-                        if t_plan % MSL == 0: # Decode new sequence
-                            dec_tgt = vae.dec_tgt_start_token # (bs, MSL|<, act_dim)
-                            dec_img_srcs = img_src
-                            dec_img_pes = img_pe
-                            dec_states = state2
-                        else:
-                            dec_img_srcs = torch.cat((dec_img_srcs, img_src), dim=0)
-                            dec_img_pes = torch.cat((dec_img_pes, img_pe), dim=0)
-                            dec_states = torch.cat((dec_states, state2), dim=1)
+                        a_hat = model.get_action(current_data, t)
+                        a_t = dataset.action_scaling(a_hat, "inverse").numpy()[0,:]
 
-                        num_actions = dec_tgt.shape[1]
-                        dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, dec_tgt.shape[1])
-                        seq_pad_mask = torch.zeros(1,num_actions) # (bs, MSL|<)
+                    # else: # Preplanned
+                    #     pbar.set_postfix(
+                    #         {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
+                    #     t_plan = t
+                    #     latent = out["latent"] if method != "plan" else out["vae_out"]["latent"]
+                    #     t_sk = torch.floor(torch.tensor(t) / MSL).to(torch.int)
+                    #     latent = latent[t_sk:t_sk+1,...]
 
-                        with torch.no_grad():
-                            a_pred = vae.skill_decode(latent, dec_states, (dec_img_srcs,dec_img_pes),
-                                                      dec_skill_pad_mask, seq_pad_mask,
-                                                      dec_src_mask, dec_mem_mask, dec_tgt_mask,
-                                                      tgt=dec_tgt) # (MSL|<, bs, action_dim)
-                        
-                        dec_tgt = torch.cat((dec_tgt, a_pred.permute(1,0,2)[:,-1:,...]), dim=1) # (1, seq + 1, act_dim)
-                        a_hat = a_pred.detach().cpu()[:,-1,...] # Take most recent action
-                        a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
-                        a_t = a_hat[0,:]
-                    else:
-                        if t_plan % MSL == 0:
-                            seq_pad_mask = torch.zeros(1,MSL)
-                            with torch.no_grad():
-                                a_hat = vae.skill_decode(latent, state, (img_src,img_pe), 
-                                                        dec_skill_pad_mask, seq_pad_mask, 
-                                                        None, None, None, None) # (MSL, bs, action_dim)
-                            a_hat = a_hat.detach().cpu().squeeze(1)
-                            a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
-                            a_t = a_hat[0,:]
-                        else:
-                            a_t = a_hat[t % MSL,:]
-
-                    # Step sim
-                    t_plan += 1
                     obs, _, _, _, info = env.step(a_t)
 
                     if args.vis:

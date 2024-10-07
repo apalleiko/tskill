@@ -463,6 +463,59 @@ class TSkillCVAE(nn.Module):
         return a_hat
     
 
+    def get_action(self, data, t):
+        # Define current info
+        t_act = t % self.max_skill_len
+        dec_skill_pad_mask = torch.zeros(1,1)
+        latent = data["latent"]
+        img_src, img_pe = data["img_feat"], data["img_pe"]
+        _,_,num_cam,num_feats,_ = img_src.shape
+        state = data["state"]
+
+        if self.autoregressive_decode:
+            if t_act == 0: # Decode new sequence
+                self.execution_data = dict()
+                self.execution_data["img_feat"] = img_src # (bs, seq, ...)
+                self.execution_data["img_pe"] = img_pe
+                self.execution_data["state"] = state # (bs, seq, state_dim)
+                self.execution_data["dec_tgt"] = self.dec_tgt_start_token # (bs, 1, act_dim)
+            else:
+                self.execution_data["img_feat"] = torch.cat((self.execution_data["img_feat"], img_src), dim=1)
+                self.execution_data["img_pe"] = torch.cat((self.execution_data["img_pe"], img_pe), dim=1)
+                self.execution_data["state"] = torch.cat((self.execution_data["state"], state), dim=1)
+
+            dec_tgt = self.execution_data["dec_tgt"]
+            img_srcs = self.execution_data["img_feat"].transpose(0,1)
+            img_pes = self.execution_data["img_pe"].transpose(0,1)
+            states = self.execution_data["state"]
+
+            num_actions = dec_tgt.shape[1]
+            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_feats*num_cam, num_actions)
+            seq_pad_mask = torch.zeros(1,num_actions) # (bs, MSL|<)
+
+            with torch.no_grad():
+                a_pred = self.skill_decode(latent, states, (img_srcs,img_pes),
+                                            dec_skill_pad_mask, seq_pad_mask,
+                                            dec_src_mask, dec_mem_mask, dec_tgt_mask,
+                                            tgt=dec_tgt) # (MSL|<, bs, action_dim)
+            
+            self.execution_data["dec_tgt"] = torch.cat((dec_tgt, a_pred[-1:,...].permute(1,0,2)), dim=1) # (1, seq + 1, act_dim)
+            a_t = a_pred.detach()[-1,...] # Take most recent action
+        else:
+            if t_act == 0:
+                seq_pad_mask = torch.zeros(1,self.max_skill_len)
+                with torch.no_grad():
+                    a_hat = self.skill_decode(latent, state, (img_src,img_pe), 
+                                            dec_skill_pad_mask, seq_pad_mask, 
+                                            None, None, None, None) # (MSL, bs, action_dim)
+                self.execution_data = dict()
+                self.execution_data["a_hat"] = a_hat.detach() 
+                
+            a_t = self.execution_data["a_hat"][t_act,...]
+
+        return a_t
+
+
     def to(self, device):
         model = super().to(device)
         model._device = device

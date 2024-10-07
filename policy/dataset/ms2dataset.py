@@ -207,6 +207,23 @@ class ManiSkillrgbSeqDataset(Dataset):
                 data[k] = v.unsqueeze(0)
 
         return data
+    
+
+    def from_obs(self, obs):
+        # Obtain observation data in the proper form
+        o = convert_observation(obs, pos_only=False)
+        # State
+        state = self.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0) # (1 (bs), 1 (seq), state_dim)
+        # Image
+        rgbd = o["rgbd"]
+        rgb = rescale_rgbd(rgbd, discard_depth=True, separate_cams=True)
+        rgb = torch.from_numpy(rgb).float().permute((3, 2, 0, 1)).unsqueeze(0).unsqueeze(0) # (1 (bs), 1 (seq), num_cams, channels, img_h, img_w)
+
+        data = dict()
+        data["rgb"] = rgb
+        data["state"] = state
+
+        return data
 
 
 ### Commands for trajectory replay ###
