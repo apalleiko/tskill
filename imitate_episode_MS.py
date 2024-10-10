@@ -27,9 +27,7 @@ from mani_skill2.utils.wrappers import RecordEpisode
 from mani_skill2.utils.visualization.misc import images_to_video
 
 from policy import config
-from policy.dataset.ms2dataset import convert_observation, rescale_rgbd
 from policy.dataset.dataset_loaders import dataset_loader
-from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks
 from policy.checkpoints import CheckpointIO
 from policy.skill.skill_vae import TSkillCVAE
 from policy.planning.skill_plan import TSkillPlan
@@ -103,28 +101,16 @@ def parse_args(args=None):
         help="whether to save the image observations seen during a full sequence run",
     )
     parser.add_argument(
-        "--cond-dec-true",
-        action="store_true",
-        default=False,
-        help="override conditional decoding true",
+        "--cond-dec",
+        type=int,
+        default=None,
+        help="override conditional decoding",
     )
     parser.add_argument(
-        "--cond-dec-false",
-        action="store_true",
-        default=False,
-        help="override conditional decoding false",
-    )
-    parser.add_argument(
-        "--cond-plan-true",
-        action="store_true",
-        default=False,
-        help="override conditional planning to set it true",
-    )
-    parser.add_argument(
-        "--cond-plan-false",
-        action="store_true",
-        default=False,
-        help="override conditional planning to set it false",
+        "--cond-plan",
+        type=int,
+        default=None,
+        help="override conditional planning",
     )
     parser.add_argument(
         "--replan-rate",
@@ -163,11 +149,9 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     # Dataset
     cfg["data"]["pad"] = True
     cfg["data"]["augment"] = False
-    cfg["data"]["full_seq"] = False
     cfg["data"]["dataset"] = "/home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_c256.h5"
     cfg["training"]["use_precalc"] = True
     use_precalc = True
-    # use_precalc = cfg["training"].get("use_precalc",False)
 
     # Load only the full episode version of the dataset
     if "train_ep_indices" not in data_info.keys():
@@ -179,9 +163,11 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     
     if not args.train:
         dataset = val_dataset
+        idxs = val_idx[:args.count]
         print("Using Validation Dataset")
     else:
         dataset = train_dataset
+        idxs = train_idx[:args.count]
         print("Using Training Dataset")
 
     # Model
@@ -194,21 +180,22 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     else:
         vae = model
     model.eval()
-    if args.cond_dec_true:
-        print("ENABLING CONDITIONAL DECODING")
-        vae.conditional_decode = True
-    if args.cond_dec_false:
-        print("DISABLING CONDITIONAL DECODING")
-        vae.conditional_decode = False
+    if args.cond_dec is not None:
+        if args.cond_dec:
+            print("ENABLING CONDITIONAL DECODING")
+            vae.conditional_decode = True
+        else:
+            print("DISABLING CONDITIONAL DECODING")
+            vae.conditional_decode = False
 
-    if args.cond_plan_true:
-        print("ENABLING CONDITIONAL PLANNING")
-        model.conditional_plan = True
-    if args.cond_plan_false:
-        print("DISABLING CONDITIONAL PLANNING")
-        model.conditional_plan = False
+    if args.cond_plan is not None:
+        if args.cond_plan:
+            print("ENABLING CONDITIONAL PLANNING")
+            model.conditional_plan = True
+        else:
+            print("DISABLING CONDITIONAL PLANNING")
+            model.conditional_plan = False
 
-    MSL = model.max_skill_len
     pbar = tqdm(position=proc_id, leave=None, unit="step", dynamic_ncols=True)
 
     # Load HDF5 containing trajectories
@@ -274,17 +261,6 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
     inds = np.arange(n_ep)
     inds = np.array_split(inds, num_procs)[proc_id]
 
-    if not args.train:
-        idxs = val_idx[:args.count]
-    else:
-        idxs = train_idx[:args.count]
-    
-    tb_out_dir = os.path.join("out/PegInsertion/imitation_logs", "tb_logs")
-    if os.path.exists(tb_out_dir):
-        print(f"Removing existing directory {tb_out_dir}")
-        shutil.rmtree(tb_out_dir, ignore_errors=True)
-    os.makedirs(tb_out_dir, exist_ok=True)
-
     # Replay
     for i in range(len(idxs)):
         ind = idxs[i]
@@ -314,124 +290,110 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
             reset_kwargs["seed"] = ep["episode_seed"]
         seed = reset_kwargs.pop("seed")
 
-        for _ in range(args.max_retry + 1):
-            env.reset(seed=seed, options=reset_kwargs)
-            if ori_env is not None:
-                ori_env.reset(seed=seed, options=reset_kwargs)
+        env.reset(seed=seed, options=reset_kwargs)
+        if ori_env is not None:
+            ori_env.reset(seed=seed, options=reset_kwargs)
 
-            ori_env_state = ori_h5_file[traj_id]["env_states"][1]
-            env.set_state(ori_env_state)
+        ori_env_state = ori_h5_file[traj_id]["env_states"][1]
+        env.set_state(ori_env_state)
 
-            if args.vis:
-                env.render_human()
+        if args.vis:
+            env.render_human()
 
-            true_actions = ori_h5_file[traj_id]["actions"]
-            ori_actions = []
-            for k in range(true_actions.shape[0]):
-                    ori_actions.append(true_actions[k,:])
+        true_actions = ori_h5_file[traj_id]["actions"]
+        ori_actions = []
+        for k in range(true_actions.shape[0]):
+                ori_actions.append(true_actions[k,:])
 
-            # Run model to reconstruct actions
-            if not args.full_seq or args.true:
-                if args.vae and method == "plan":
-                    if pbar is not None:
-                        pbar.set_postfix(
-                            {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
-                    a_hat = out["vae_out"]["a_hat"].detach().cpu().squeeze()
-                else:
-                    if pbar is not None:
-                        pbar.set_postfix(
-                            {"mode": "Planned Single", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
-                    a_hat = out["a_hat"].detach().cpu().squeeze()
-                
-                # Invert scaling on the actions
-                a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
-                pred_actions = []
-                for i in range(a_hat.shape[0]):
-                    pred_actions.append(a_hat[i,:])
-
-                info = {}
-
-                # Without conversion between control modes
-                n = len(pred_actions)
+        # Run model to reconstruct actions
+        if not args.full_seq or args.true or args.vae:
+            if args.vae and method == "plan":
                 if pbar is not None:
-                    pbar.reset(total=n)
-
-                if args.true:
-                    if pbar is not None:
-                        pbar.set_postfix(
-                            {"mode": "True"})
-                    actions = ori_actions
-                else:
-                    actions = pred_actions
-
-                for t, a in enumerate(actions):
-                    if pbar is not None:
-                        pbar.update()
-                    _, _, _, _, info = env.step(a)
-
-                    if args.vis:
-                        env.render_human()
-
-            # Run model to predict actions based on current obs
+                    pbar.set_postfix(
+                        {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
+                a_hat = out["vae_out"]["a_hat"].detach().cpu().squeeze()
             else:
-                info = {}
-                img_obs = []
-
-                # Take a zero step to get initial observations
-                obs, _, _, _, info = env.step(ori_actions[0])
-
                 if pbar is not None:
-                    pbar.reset(total=max_episode_steps)
-                for t in range(max_episode_steps):
-                    if pbar is not None:
-                        pbar.update()
-                    
-                    current_data = dataset.from_obs(obs)
-                    if "goal_feat" in data.keys():
-                        current_data["goal_feat"] = data["goal_feat"]
-                        current_data["goal_pe"] = data["goal_pe"]
-                    else:
-                        current_data["goal"] = data["goal"]
+                    pbar.set_postfix(
+                        {"mode": "Planned Single", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                a_hat = out["a_hat"].detach().cpu().squeeze()
+            
+            # Invert scaling on the actions
+            a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
+            pred_actions = []
+            for i in range(a_hat.shape[0]):
+                pred_actions.append(a_hat[i,:])
 
-                    # Get current skill
-                    if method == "plan" and not args.vae:
-                        pbar.set_postfix(
-                            {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
-                    
-                        a_hat = model.get_action(current_data, t)
-                        a_t = dataset.action_scaling(a_hat, "inverse").numpy()[0,:]
+            info = {}
 
-                    # else: # Preplanned
-                    #     pbar.set_postfix(
-                    #         {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
-                    #     t_plan = t
-                    #     latent = out["latent"] if method != "plan" else out["vae_out"]["latent"]
-                    #     t_sk = torch.floor(torch.tensor(t) / MSL).to(torch.int)
-                    #     latent = latent[t_sk:t_sk+1,...]
+            n = len(pred_actions)
+            if pbar is not None:
+                pbar.reset(total=n)
 
-                    obs, _, _, _, info = env.step(a_t)
-
-                    if args.vis:
-                        env.render_human()
-
-            success = info.get("success", False)
-            if args.discard_timeout:
-                timeout = "TimeLimit.truncated" in info
-                success = success and (not timeout)
-
-            if success or args.allow_failure:
-                env.flush_trajectory()
-                env.flush_video()
-                if args.save_obs:
-                    images_to_video(img_obs, output_dir, f"ep_{ind}_obs", 20, 10)
-                break
+            if args.true:
+                if pbar is not None:
+                    pbar.set_postfix(
+                        {"mode": "True"})
+                actions = ori_actions
             else:
-                # Rollback episode id for failed attempts
-                env._episode_id -= 1
-                if args.verbose:
-                    print("info", info)
+                actions = pred_actions
+
+            for t, a in enumerate(actions):
+                if pbar is not None:
+                    pbar.update()
+                _, _, _, _, info = env.step(a)
+
+                if args.vis:
+                    env.render_human()
+
+        # Run model to predict actions based on current obs
         else:
-            tqdm.write(f"Episode {episode_id} is not replayed successfully.")
+            info = {}
+            img_obs = []
+
+            # Take a zero step to get initial observations
+            obs, _, _, _, info = env.step(ori_actions[0])
+            pbar.reset(total=max_episode_steps)
+            for t in range(max_episode_steps):
+                pbar.update()
+                current_data = dataset.from_obs(obs)
+                if "goal_feat" in data.keys():
+                    current_data["goal_feat"] = data["goal_feat"]
+                    current_data["goal_pe"] = data["goal_pe"]
+                else:
+                    current_data["goal"] = data["goal"]
+
+                # Get current skill
+                if method == "plan" and not args.vae:
+                    pbar.set_postfix(
+                        {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                
+                    a_hat = model.get_action(current_data, t)
+                    a_t = dataset.action_scaling(a_hat, "inverse").numpy()[0,:]
+
+                obs, _, _, _, info = env.step(a_t)
+
+                if args.vis:
+                    env.render_human()
+
+        success = info.get("success", False)
+        if args.discard_timeout:
+            timeout = "TimeLimit.truncated" in info
+            success = success and (not timeout)
+
+        if success or args.allow_failure:
+            env.flush_trajectory()
+            env.flush_video()
+            if args.save_obs:
+                images_to_video(img_obs, output_dir, f"ep_{ind}_obs", 20, 10)
+            break
+        else:
+            # Rollback episode id for failed attempts
+            env._episode_id -= 1
+            if args.verbose:
+                print("info", info)
+    else:
+        tqdm.write(f"Episode {episode_id} is not replayed successfully.")
 
     # Cleanup
     env.close()

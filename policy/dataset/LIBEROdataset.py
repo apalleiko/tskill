@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 import h5py
 from policy.dataset.data_utils import load_h5_data
-from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks, get_plan_ar_masks, get_skill_pad_from_seq_pad
+from policy.dataset.masking_utils import get_skill_pad_from_seq_pad
 
 
 def tensor_to_numpy(x):
@@ -28,6 +28,27 @@ def convert_observation(observation):
     # combine the RGB and depth images
     cams.append(observation["agentview_rgb"][:,::-1,:])
     cams.append(observation["eye_in_hand_rgb"])
+
+    rgb = np.concatenate(cams, axis=-1)
+    obs["rgb"] = rgb
+        
+    return obs
+
+
+def convert_realtime_observation(observation):
+    # flattens the original observation by flattening the state dictionaries
+    # and combining the rgb and depth images
+    # we provide a simple tool to flatten dictionaries with state data
+    state = np.hstack(
+            [observation["robot0_joint_pos"],
+             observation["robot0_gripper_qpos"]])
+    obs = dict(state=state)
+
+    # image data is not scaled here and is kept as uint16 to save space
+    cams = []
+    # combine the RGB and depth images
+    cams.append(observation["agentview_image"][:,::-1,:])
+    cams.append(observation["robot0_eye_in_hand_image"])
 
     rgb = np.concatenate(cams, axis=-1)
     obs["rgb"] = rgb
@@ -175,5 +196,21 @@ class LiberoDataset(Dataset):
         if self.add_batch_dim:
             for k,v in data.items():
                 data[k] = v.unsqueeze(0)
+
+        return data
+    
+    def from_obs(self, obs):
+        # Obtain observation data in the proper form
+        o = convert_realtime_observation(obs)
+        # State
+        state = self.state_scaling(torch.from_numpy(o["state"]).unsqueeze(0)).float().unsqueeze(0) # (1 (bs), 1 (seq), state_dim)
+        # Image
+        rgb = o["rgb"]
+        rgb = rescale_rgbd(rgb, separate_cams=True)
+        rgb = torch.from_numpy(rgb).float().permute((3, 2, 0, 1)).unsqueeze(0).unsqueeze(0) # (1 (bs), 1 (seq), num_cams, channels, img_h, img_w)
+
+        data = dict()
+        data["rgb"] = rgb
+        data["state"] = state
 
         return data
