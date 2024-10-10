@@ -1,7 +1,9 @@
 import argparse
 import sys
 import os
+
 sys.path.append('./LIBERO/')
+from matplotlib import pyplot as plt
 
 # TODO: find a better way for this?
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -17,7 +19,7 @@ from tqdm import tqdm
 
 from LIBERO.libero.libero import get_libero_path
 from LIBERO.libero.libero.benchmark import get_benchmark
-from LIBERO.libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, ControlEnv
+from LIBERO.libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, ControlEnv, DemoRenderEnv
 from LIBERO.libero.libero.utils.time_utils import Timer
 from LIBERO.libero.libero.utils.video_utils import VideoWriter
 from LIBERO.libero.lifelong.algos import *
@@ -116,12 +118,6 @@ def parse_args():
 def main():
     args = parse_args()
     # e.g., experiments/LIBERO_SPATIAL/Multitask/BCRNNPolicy_seed100/
-
-    # experiment_dir = os.path.join(
-    #     args.model_dir,
-    #     f"{benchmark_map[args.benchmark]}/"
-    #     + f"_seed{args.seed}",
-    # )
 
     cfg_path = os.path.join(args.model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
@@ -234,8 +230,9 @@ def main():
         # env = SubprocVectorEnv(
         #     [lambda: OffScreenRenderEnv(**env_args) for _ in range(env_num)]
         # )
-        env = OffScreenRenderEnv(**env_args)
-        # env_args["has_renderer"] = True
+        # env = OffScreenRenderEnv(**env_args)
+        # env = OffScreenRenderEnv(**env_args)
+        env = DemoRenderEnv(**env_args)
         # env = ControlEnv(**env_args)
         env.reset()
         env.seed(args.seed)
@@ -252,6 +249,10 @@ def main():
         dones = [False] * env_num
         steps = 0
         obs = env.set_init_state(init_states_)
+
+        for _ in range(10):  # simulate the physics without any actions
+            env.step(np.zeros(7))
+
         # task_emb = benchmark.get_task_emb(args.task_id)
 
         pbar.set_description(f"Replaying {ind}")
@@ -283,13 +284,13 @@ def main():
             for t, a in enumerate(actions):
                 pbar.update()
                 obs, reward, done, info = env.step(a)
-                img_obs.append(obs["agentview_image"][::-1,:])
+                img = env.sim.render(512,512,camera_name="frontview")[::-1,...]
+                # img = obs["agentview_image"][::-1,...]
+                img_obs.append(img)
 
             success_rate = 0
         else:
             num_success = 0
-            for _ in range(5):  # simulate the physics without any actions
-                env.step(np.zeros(7))
 
             if args.max_steps is None:
                 args.max_steps = out["a_hat"].shape[1]
@@ -311,7 +312,9 @@ def main():
                 actions = model.get_action(current_data, steps)
                 actions = dataset.action_scaling(actions,"inverse").numpy()[0,:]
                 obs, reward, done, info = env.step(actions)
-                img_obs.append(obs["agentview_image"][::-1,:])
+                img = env.sim.render(512,512,camera_name="frontview")[::-1,...]
+                # img = obs["agentview_image"][::-1,...]
+                img_obs.append(img)
 
                 steps += 1
                 pbar.update()
@@ -319,6 +322,7 @@ def main():
                 # for k in range(env_num):
                 #     dones[k] = dones[k] or done[k]
                 if done:
+                    print("Success!")
                     break
 
             for k in range(env_num):

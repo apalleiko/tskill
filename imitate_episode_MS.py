@@ -325,24 +325,19 @@ def _main(args, proc_id: int = 0, num_procs=1, pbar=None):
                 pred_actions.append(a_hat[i,:])
 
             info = {}
-
             n = len(pred_actions)
-            if pbar is not None:
-                pbar.reset(total=n)
+            pbar.reset(total=n)
 
             if args.true:
-                if pbar is not None:
-                    pbar.set_postfix(
-                        {"mode": "True"})
+                pbar.set_postfix(
+                    {"mode": "True"})
                 actions = ori_actions
             else:
                 actions = pred_actions
 
             for t, a in enumerate(actions):
-                if pbar is not None:
-                    pbar.update()
+                pbar.update()
                 _, _, _, _, info = env.step(a)
-
                 if args.vis:
                     env.render_human()
 
