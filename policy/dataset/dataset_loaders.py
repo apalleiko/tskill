@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
+import torch.utils
 from torch.utils.data import DataLoader
+import torch.utils.data
 from tqdm import tqdm
 import dill as pickle
 import os
@@ -10,7 +12,7 @@ import numpy as np
 import copy
 
 from mani_skill2.utils.io_utils import load_json
-from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data
+from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data, pad2size
 from policy.dataset.ms2dataset import ManiSkillrgbSeqDataset, convert_observation as convert_obs_ms
 from policy.dataset.LIBEROdataset import LiberoDataset, convert_observation as convert_obs_libero
 from policy.dataset.multitask_dataset import MultitaskDataset
@@ -244,7 +246,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         ### Get extra configs
         return_dataset = kwargs.get("return_datasets", False)
         override_batch_dim = kwargs.get("add_batch_dim",False)
-        add_batch_dim = not pad or return_dataset or override_batch_dim
+        add_batch_dim = return_dataset or override_batch_dim
         if add_batch_dim:
             print("Adding batch dimension to returned data!")
         if batch_size == 1:
@@ -255,6 +257,8 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
             pad2msl_val = True
         else:
             pad2msl_val = False
+
+        pad2msl_train = pad2msl_val = False #BUG
 
         ### Create datasets
         if mode == "maniskill":
@@ -340,6 +344,7 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
             print(f"Loading dataset: {i}")
             cfg_i = copy.deepcopy(cfg)
             cfg_i["data"]["dataset"] = i
+            cfg_i["data"]["pad"] = False # Pad in collate fcn
             train_i, val_i, _ = dataset_loader(cfg_i, multitask=True, data_info=data_info_i, **kwargs)
             train_sequence_datasets.append(train_i)
             val_sequence_datasets.append(val_i)
@@ -356,6 +361,7 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
             print(f"Loading dataset: {i}")
             cfg_i = copy.deepcopy(cfg)
             cfg_i["data"]["dataset"] = i
+            cfg_i["data"]["pad"] = False # Pad in collate fcn
             train_i, val_i, data_info_i = dataset_loader(cfg_i, multitask=True, **kwargs)
             data_info["datasets"][i] = data_info_i
             train_sequence_datasets.append(train_i)
@@ -455,10 +461,25 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     train_loader =  DataLoader(train_dataset, batch_size=batch_size, 
                                 num_workers=cfg["training"]["n_workers"],
                                 pin_memory=True, drop_last=True, shuffle=shuffle,
-                                persistent_workers=True)
+                                persistent_workers=True, collate_fn=efficient_collate_fn)
     val_loader =  DataLoader(val_dataset, batch_size=batch_size_val,
                                 num_workers=cfg["training"]["n_workers_val"], 
                                 pin_memory=True, drop_last=True, shuffle=shuffle,
-                                persistent_workers=True)
+                                persistent_workers=True, collate_fn=efficient_collate_fn)
     
     return train_loader, val_loader
+
+
+def efficient_collate_fn(batch):
+    max_skill_len = 10 #HARDCODED
+    collate_fn = torch.utils.data.default_collate
+    sizes = [b["actions"].shape[0] for b in batch]
+
+    # Get largest size
+    max_seq_len = max(sizes)
+    max_seq_len = int(np.ceil(max_seq_len / 10) * 10)
+    for i in range(len(batch)):
+        batch[i] = pad2size(batch[i], max_seq_len, max_skill_len)
+    
+    return collate_fn(batch)
+

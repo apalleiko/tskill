@@ -3,8 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 import h5py
-from policy.dataset.data_utils import load_h5_data
-from policy.dataset.masking_utils import get_skill_pad_from_seq_pad
+from policy.dataset.data_utils import load_h5_data, pad2size
 
 
 def tensor_to_numpy(x):
@@ -134,7 +133,7 @@ class LiberoDataset(Dataset):
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
-            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
         else:
             use_precalc = False
             rgb = rescale_rgbd(obs["rgb"], separate_cams=True)
@@ -148,45 +147,21 @@ class LiberoDataset(Dataset):
                 data["goal"] = rgb[-1:,...]
 
         # Add padding to sequences to match lengths and generate padding masks
-        if self.pad:
-            num_unpad_seq = actions.shape[0]
-            if self.pad2msl:
-                pad = self.max_skill_len - (num_unpad_seq % self.max_skill_len)
-            else:
-                pad = self.max_seq_len - num_unpad_seq
-            seq_pad_mask = torch.cat((torch.zeros(actions.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
-
-            state_pad = torch.zeros([pad] + list(state.shape[1:]))
-            state = torch.cat((state, state_pad), axis=0).to(torch.float32)
-            
-            act_pad = torch.zeros([pad] + list(actions.shape[1:]))
-            actions = torch.cat((actions, act_pad), axis=0).to(torch.float32)
-            
-            if use_precalc:
-                img_feat_pad = torch.zeros([pad] + list(img_feat.shape[1:]))
-                img_feat = torch.cat((img_feat, img_feat_pad), axis=0).to(torch.float32)
-                img_pe_pad = torch.zeros([pad] + list(img_pe.shape[1:]))
-                img_pe = torch.cat((img_pe, img_pe_pad), axis=0).to(torch.float32)
-            else:
-                rgb_pad = torch.zeros([pad] + list(rgb.shape[1:]))
-                rgb = torch.cat((rgb, rgb_pad), axis=0).to(torch.float32)
-                
-        else: # If not padding, this is being passed directly to model.
-            seq_pad_mask = torch.zeros(actions.shape[0]).to(torch.bool)
-        
-        # Infer skill padding mask from input sequence mask
-        skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, self.max_skill_len)
-
-        data.update(dict(state=state, 
-                    seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask,
-                    actions=actions))
-        
-        # Add precalculated features to data if applicable
         if use_precalc:
-            data["img_feat"] = img_feat
-            data["img_pe"] = img_pe
+            inputs = dict(state=state,actions=actions,img_feat=img_feat,img_pe=img_pe)
         else:
-            data["rgb"] = rgb
+            inputs = dict(state=state,actions=actions,rgb=rgb)
+            
+        num_unpad_seq = actions.shape[0]
+        if self.pad:
+            if self.pad2msl:
+                sz = num_unpad_seq - (num_unpad_seq % self.max_skill_len) + self.max_skill_len
+            else:
+                sz = self.max_seq_len
+            
+            inputs = pad2size(inputs, sz, self.max_skill_len)
+
+        data.update(inputs)
 
         # Some augmentation assumes masking
         if self.augmentation is not None:

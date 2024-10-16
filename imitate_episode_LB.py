@@ -111,7 +111,7 @@ def parse_args():
         help="whether to show vae output for planning model",
     )
     args = parser.parse_args()
-    args.save_dir = f"{args.model_dir}_evals"
+    args.save_dir = f"{args.model_dir}/evals"
     return args
 
 
@@ -132,7 +132,6 @@ def main():
     # Dataset
     cfg["data"]["pad"] = True
     cfg["data"]["augment"] = False
-    # cfg["data"]["dataset"] = 
     use_precalc = True
 
     train_dataset, val_dataset = dataset_loader(cfg, return_datasets=True, 
@@ -170,6 +169,7 @@ def main():
             model.conditional_plan = True
         else:
             print("DISABLING CONDITIONAL PLANNING")
+            model.conditional_plan = False
 
     cfg["libero_cfg"] = dict()
     cfg["libero_cfg"]["folder"] = get_libero_path("datasets")
@@ -187,6 +187,8 @@ def main():
     task = benchmark.get_task(args.task_id)
     print("RUNNING ON TASK: ",task.name)
     task_dataset: LiberoDataset = [d for d in dataset.sequence_datasets if task.name in d.dataset_file][0]
+    task_dataset.pad = True
+    task_dataset.pad2msl = True
     data_info = data_info["datasets"][task_dataset.dataset_file]
 
     # Load only the full episode version of the dataset
@@ -287,6 +289,10 @@ def main():
                 img = env.sim.render(512,512,camera_name="frontview")[::-1,...]
                 # img = obs["agentview_image"][::-1,...]
                 img_obs.append(img)
+                
+                if done:
+                    print("Success!")
+                    break
 
             success_rate = 0
         else:

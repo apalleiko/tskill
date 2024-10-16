@@ -115,12 +115,12 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 1
-        cfg["training"]["batch_size_alt"] = 1
+        cfg["training"]["batch_size"] = 6
+        cfg["training"]["batch_size_alt"] = 6
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 20
+        cfg["training"]["validate_every"] = 21
         cfg["training"]["checkpoint_every"] = 1000
         cfg["training"]["max_it"] = 20
 
@@ -144,15 +144,16 @@ def main(args):
         raise ValueError("model_selection_mode must be " "either maximize or minimize.")
     
     # Initialize wandb
-    project_name = "tskill"
-    run_name = "peg_insertion"
-    if args.bootstrap:
-        project_name += "-bootstrapping"
-    wandb.init(
-        project=project_name, config=cfg, settings=wandb.Settings(start_method="fork")
-    )
-    wandb.run.name = "-".join([run_name, wandb.run.name.split("-")[-1]])
-    wandb.run.save()
+    if not args.debug:
+        project_name = "tskill"
+        run_name = "peg_insertion"
+        if args.bootstrap:
+            project_name += "-bootstrapping"
+        wandb.init(
+            project=project_name, config=cfg, settings=wandb.Settings(start_method="fork")
+        )
+        wandb.run.name = "-".join([run_name, wandb.run.name.split("-")[-1]])
+        wandb.run.save()
     yaml.dump(cfg, sys.stdout)
 
     # make output dir
@@ -171,9 +172,8 @@ def main(args):
 
     # Model
     model = config.get_model(cfg, device=device)
-    if torch.cuda.device_count() > 1:
-        model = torch.nn.DataParallel(model)
     print(model)
+    # model = torch.compile(model)
 
     # Intialize training
     param_dicts = [{"params": [p for n, p in model.named_parameters() if "stt_encoder" not in n and p.requires_grad]}]
@@ -184,11 +184,14 @@ def main(args):
         })
 
     optimizer = torch.optim.AdamW(param_dicts, lr=lr,
-                                  weight_decay=weight_decay)    
+                                  weight_decay=weight_decay)
     
     lr_decay = cfg["training"].get("lr_decay",1)
     if lr_decay < 1 and lr_decay!=0:
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
+        if we := cfg["training"].get("lr_warmup_epochs",0) > 0:
+            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=we)
+            scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler_wu, scheduler],[we])
     else:
         scheduler = None
     
@@ -259,7 +262,9 @@ def main(args):
                 metrics[f"train/metrics/mean_unscaled_plan_grip_error"] = F.l1_loss(a_hat[:,-1], a_targ[:,-1], reduction="sum") / (a_hat.shape[0]*1)
             if scheduler is not None:
                 metrics.update({"train/metrics/lr": scheduler.get_last_lr()[0]})
-            wandb.log(metrics)
+            
+            if not args.debug:
+                wandb.log(metrics)
             
             # Log tensorboard input histograms
             if epoch_it == 1 and args.log_inputs:
@@ -357,7 +362,8 @@ def main(args):
                 # metrics.update({"val/sim_act_loss": sim_eval["sim_act_loss"]})
                 metrics.update({"it": it})
 
-                wandb.log(metrics)
+                if not args.debug:
+                    wandb.log(metrics)
 
                 if model_selection_sign * (metric_val - metric_val_best) > 0:
                     metric_val_best = metric_val

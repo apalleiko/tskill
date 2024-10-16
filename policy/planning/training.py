@@ -77,31 +77,31 @@ class Trainer(BaseTrainer):
                     _dict[k] = v.item()
                 mb_loss_dict = _dict
                 mb_losses.append(mb_loss_dict)
-                mb_loss = mb_loss / self.alt_batch_num / 2
+                mb_loss = mb_loss / self.alt_batch_num
                 mb_loss.backward()
     
                 del mb_loss
                 del mb_data
 
-            alt_loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
-            alt_metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "traj" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
+            loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
+            metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "vector" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
+        else:
+            loss_dict, metric_dict = self.compute_loss(data)
 
-        # Always compute normal loss gradient
-        loss_dict, metric_dict = self.compute_loss(data)
+            loss = 0.0
+            _dict = {}
+            for k, v in loss_dict.items():
+                loss += v
+                _dict[k] = v.item()
+            loss_dict = _dict
+            metric_dict = {k: metric_dict[k].item() if "vector" not in k else metric_dict[k] for k in metric_dict.keys()}
 
-        loss = 0.0
-        _dict = {}
-        for k, v in loss_dict.items():
-            loss += v
-            _dict[k] = v.item()
-        loss_dict = _dict
+            # if alt_loss_dict is not None:
+            #     loss_dict = {k: np.mean([l[k] for l in (loss_dict, alt_loss_dict)]) for k in loss_dict.keys()}
+            #     loss = loss / 2
 
-        if alt_loss_dict is not None:
-            loss_dict = {k: np.mean([l[k] for l in (loss_dict, alt_loss_dict)]) for k in loss_dict.keys()}
-            metric_dict = {k: torch.mean(torch.stack([m[k] for m in (metric_dict, alt_metric_dict)])).item() if "vector" not in k else metric_dict[k] for k in metric_dict.keys()}
-            loss = loss / 2
+            loss.backward()
 
-        loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(),max_norm=1.0)
         self.optimizer.step()
 
@@ -158,11 +158,11 @@ class Trainer(BaseTrainer):
             prev_cond_plan = self.model.conditional_plan
             prev_cond_dec = self.model.vae.conditional_decode
             self.model.conditional_plan = not prev_cond_plan
-            self.model.vae.conditional_decode = not prev_cond_dec
+            # self.model.vae.conditional_decode = not prev_cond_dec
         out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
         if alt:
             self.model.conditional_plan = prev_cond_plan
-            self.model.vae.conditional_decode = prev_cond_dec
+            # self.model.vae.conditional_decode = prev_cond_dec
 
         a_hat = out["a_hat"]
         z_hat = out["z_hat"]

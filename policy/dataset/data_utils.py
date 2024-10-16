@@ -1,7 +1,9 @@
+import sys
 import torch
 import sklearn.preprocessing as skp
 from torchvision.transforms import v2
 import h5py
+from policy.dataset.masking_utils import get_skill_pad_from_seq_pad
 
 # loads h5 data into memory for faster access
 def load_h5_data(data):
@@ -12,6 +14,24 @@ def load_h5_data(data):
         else:
             out[k] = load_h5_data(data[k])
     return out
+
+
+def pad2size(items,sz,max_skill_len):
+    """Function for padding a dictionary of input items of the same length to a specific length 
+    along the first dimension. Also creates a sequence padding mask for the items."""
+    num_unpad_seq = items["actions"].shape[0]
+    pad = sz - num_unpad_seq
+    seq_pad_mask = torch.cat((torch.zeros(num_unpad_seq), torch.ones(pad)), axis=0).to(torch.bool)
+    skill_pad_mask = get_skill_pad_from_seq_pad(seq_pad_mask, max_skill_len)
+    new_items = dict(seq_pad_mask=seq_pad_mask, skill_pad_mask=skill_pad_mask)
+    for k,v in items.items():
+        if "goal" in k:
+            new_items[k] = v
+        else:
+            v_pad = torch.zeros([pad] + list(v.shape[1:]))
+            v_new = torch.cat((v, v_pad), axis=0).to(torch.float32)
+            new_items[k] = v_new
+    return new_items
 
 
 class ScalingFunction:
@@ -98,14 +118,14 @@ class DataAugmentation:
     def additive_input_noise(self, data):
         feat_std = 0.05
         pos_std = 0.01
-        vel_std = 0.005
+        # vel_std = 0.005
         
         val = torch.rand(1)
         if self.input_noise > val:
             state_dim = data["state"].shape[-1] // 2
             state_noise = torch.randn(data["state"].shape)
             state_noise[:,:state_dim] = state_noise[:,:state_dim]*pos_std
-            state_noise[:,state_dim:] = state_noise[:,state_dim:]*vel_std
+            # state_noise[:,state_dim:] = state_noise[:,state_dim:]*vel_std
             feat_noise = feat_std*torch.abs(torch.randn(data["img_feat"].shape))
             
             data["state"] = data["state"] + state_noise
