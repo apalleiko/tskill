@@ -1,24 +1,25 @@
 method: plan
-notes: 25% c.p. 512 hidden dim (many more params) and 256 hidden. No aug.
+notes: 25% c.p. 256 hidden dim (many more params) and 256 hidden. Fullseq and subsequencing.
 data:
   mode: libero
   dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90"
   val_split: .1
   preshuffle: False
   max_seq_len: 380
-  augment: False
+  augment: True
   augmentation:
-    subsequence_rate: 0
+    subsequence_rate: 0.5
     image_aug: 0
-    input_noise: 0.5
+    input_noise: 0
   max_count: 50
   full_seq: False
+  full_seq_val: False
   # goal_mode: image
 
 model:
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/005
-  hidden_dim: 512
-  dropout : 0.2
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/007
+  hidden_dim: 256
+  dropout : 0.1
   nheads : 8
   dim_feedforward : 1024
   enc_layers : 4
@@ -32,12 +33,12 @@ loss:
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/010
+  out_dir: out/PegInsertion/Plan/011
   train_vae: True
   max_it: 100000
-  batch_size: 5
-  batch_size_val: 5
-  batch_size_alt: 5
+  batch_size: 6
+  batch_size_val: 6
+  batch_size_alt: 6
   fraction_alt: 0.25
   val_alt: True
   print_every: 50
@@ -51,7 +52,7 @@ training:
   n_workers_val: 2
   lr_state_encoder: 0
   lr: 0.00003
-  lr_decay: 0.999
-  lr_warmup_epochs: 3
+  lr_decay: 0.99
+  lr_warmup_epochs: 2
   weight_decay: 0.0001
   use_precalc: True

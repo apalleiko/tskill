@@ -147,7 +147,7 @@ def main():
     # Model
     model: TSkillCVAE | TSkillPlan = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
+    load_dict = checkpoint_io.load("model_100000.pt")
     model.to(model._device)
     if method == "plan":
         vae = model.vae

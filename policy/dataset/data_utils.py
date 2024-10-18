@@ -34,6 +34,20 @@ def pad2size(items,sz,max_skill_len):
     return new_items
 
 
+def efficient_collate_fn(batch):
+    max_skill_len = 10 #HARDCODED
+    collate_fn = torch.utils.data.default_collate
+    sizes = [b["actions"].shape[0] for b in batch]
+
+    # Get largest size
+    max_seq_len = max(sizes)
+    max_seq_len = int(np.ceil(max_seq_len / 10) * 10)
+    for i in range(len(batch)):
+        batch[i] = pad2size(batch[i], max_seq_len, max_skill_len)
+    
+    return collate_fn(batch)
+
+
 class ScalingFunction:
     def __init__(self, scaling, data, sep_idx=None) -> None:
         if isinstance(scaling, (int, float, list, tuple)):
@@ -134,8 +148,9 @@ class DataAugmentation:
         return data
 
     def subsequence(self, data):
-        seq_pad_mask = data["seq_pad_mask"]
-        num_unpad_seq = torch.sum((~seq_pad_mask).to(torch.int16))
+        """Takes a subsequence of the original data. Assumes no masking in data yet.
+        For planning model, resets new goal as last image in the sequence."""
+        num_unpad_seq = data["actions"].shape[0]
 
         val = torch.rand(1)
         if self.subsequence_rate > val:
@@ -160,9 +175,9 @@ class DataAugmentation:
 
             # Recalculate appropriate masking 
             # (also start from the begining of the seq)
-            num_unpad_skills = torch.ceil(torch.clone(num_seq / self.max_skill_len)).to(torch.int16)
-            data["skill_pad_mask"][num_unpad_skills:] = True
-            data["seq_pad_mask"][num_seq:] = True
+            # num_unpad_skills = torch.ceil(torch.clone(num_seq / self.max_skill_len)).to(torch.int16)
+            # data["skill_pad_mask"][num_unpad_skills:] = True
+            # data["seq_pad_mask"][num_seq:] = True
 
         return data
 

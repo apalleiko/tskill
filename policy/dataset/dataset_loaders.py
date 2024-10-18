@@ -12,7 +12,7 @@ import numpy as np
 import copy
 
 from mani_skill2.utils.io_utils import load_json
-from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data, pad2size
+from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data, pad2size, efficient_collate_fn
 from policy.dataset.ms2dataset import ManiSkillrgbSeqDataset, convert_observation as convert_obs_ms
 from policy.dataset.LIBEROdataset import LiberoDataset, convert_observation as convert_obs_libero
 from policy.dataset.multitask_dataset import MultitaskDataset
@@ -52,6 +52,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         autoregressive_decode: bool = cfg_model_vae["autoregressive_decode"] # Whether decoding autoregressively
         encoder_is_causal: bool = cfg_model_vae.get("encoder_is_causal",True) # Whether encoder has causal masks applied
         full_seq: bool = cfg_data.get("full_seq") # Whether to use a mapping for the episodes to start at each timestep
+        full_seq_val = cfg_data.get("full_seq_val",full_seq)
         max_seq_len = cfg_data.get("max_seq_len", 0)
         batch_size = cfg["training"]["batch_size"]
         batch_size_val = cfg["training"]["batch_size_val"]
@@ -223,10 +224,14 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                 for j in range(train_lengths[i]):
                     train_mapping.append((train_idx[i], j))
 
-            val_mapping = []        
-            for i in range(len(val_idx)):
-                for j in range(val_lengths[i]):
-                    val_mapping.append((val_idx[i], j))
+            if full_seq_val:
+                val_mapping = []        
+                for i in range(len(val_idx)):
+                    for j in range(val_lengths[i]):
+                        val_mapping.append((val_idx[i], j))
+            else:
+                print("Excluding val dataset from fullseq")
+                val_mapping = val_idx
             
             data_info["train_indices"] = train_mapping
             data_info["val_indices"] = val_mapping
@@ -277,7 +282,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                             max_seq_len, max_skill_len,
                             pad, None,
                             act_scaling, stt_scaling,
-                            full_seq, autoregressive_decode, encoder_is_causal,
+                            full_seq_val, autoregressive_decode, encoder_is_causal,
                             add_batch_dim=add_batch_dim,
                             pad2msl=pad2msl_val)
 
@@ -468,18 +473,3 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
                                 persistent_workers=True, collate_fn=efficient_collate_fn)
     
     return train_loader, val_loader
-
-
-def efficient_collate_fn(batch):
-    max_skill_len = 10 #HARDCODED
-    collate_fn = torch.utils.data.default_collate
-    sizes = [b["actions"].shape[0] for b in batch]
-
-    # Get largest size
-    max_seq_len = max(sizes)
-    max_seq_len = int(np.ceil(max_seq_len / 10) * 10)
-    for i in range(len(batch)):
-        batch[i] = pad2size(batch[i], max_seq_len, max_skill_len)
-    
-    return collate_fn(batch)
-

@@ -120,7 +120,7 @@ def main(args):
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 21
+        cfg["training"]["validate_every"] = 10
         cfg["training"]["checkpoint_every"] = 1000
         cfg["training"]["max_it"] = 20
 
