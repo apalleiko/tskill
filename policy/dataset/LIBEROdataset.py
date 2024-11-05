@@ -17,16 +17,15 @@ def convert_observation(observation):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
     # we provide a simple tool to flatten dictionaries with state data
-    state = np.hstack(
-            [observation["joint_states"],
-             observation["gripper_states"]])
+
+    state = observation["robot_states"]
     obs = dict(state=state)
 
     # image data is not scaled here and is kept as uint16 to save space
     cams = []
     # combine the RGB and depth images
-    cams.append(observation["agentview_rgb"][:,::-1,:])
-    cams.append(observation["eye_in_hand_rgb"])
+    cams.append(observation["obs"]["agentview_rgb"][:,::-1,:])
+    cams.append(observation["obs"]["eye_in_hand_rgb"])
 
     rgb = np.concatenate(cams, axis=-1)
     obs["rgb"] = rgb
@@ -38,9 +37,11 @@ def convert_realtime_observation(observation):
     # flattens the original observation by flattening the state dictionaries
     # and combining the rgb and depth images
     # we provide a simple tool to flatten dictionaries with state data
+    
     state = np.hstack(
-            [observation["robot0_joint_pos"],
-             observation["robot0_gripper_qpos"]])
+            [observation["robot0_gripper_qpos"],
+             observation["robot0_eef_pos"],
+             observation["robot0_eef_quat"]])
     obs = dict(state=state)
 
     # image data is not scaled here and is kept as uint16 to save space
@@ -51,7 +52,7 @@ def convert_realtime_observation(observation):
 
     rgb = np.concatenate(cams, axis=-1)
     obs["rgb"] = rgb
-        
+    
     return obs
 
 
@@ -125,7 +126,7 @@ class LiberoDataset(Dataset):
         trajectory = load_h5_data(trajectory)
 
         # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"])
+        obs = convert_observation(trajectory)
         
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         state = self.state_scaling(torch.from_numpy(obs["state"])[i0:,:].float()) # (seq, state_dim)
@@ -133,7 +134,8 @@ class LiberoDataset(Dataset):
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
-            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            # img_pe2 =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden) #BUG
         else:
             use_precalc = False
             rgb = rescale_rgbd(obs["rgb"], separate_cams=True)
@@ -143,12 +145,13 @@ class LiberoDataset(Dataset):
             if use_precalc:
                 data["goal_feat"] = img_feat[-1:,...]
                 data["goal_pe"] = img_pe[-1:,...]
+                # data["goal_pe_plan"] = img_pe2[-1:,...]
             else:
                 data["goal"] = rgb[-1:,...]
 
         # Add padding to sequences to match lengths and generate padding masks
         if use_precalc:
-            inputs = dict(state=state,actions=actions,img_feat=img_feat,img_pe=img_pe)
+            inputs = dict(state=state,actions=actions,img_feat=img_feat,img_pe=img_pe,) # img_pe_plan=img_pe2) #BUG
         else:
             inputs = dict(state=state,actions=actions,rgb=rgb)
             

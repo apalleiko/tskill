@@ -40,7 +40,7 @@ class Trainer(BaseTrainer):
         self.kl_weights = cfg["loss"]["kl_weights"]
         self.gradient_accumulation = cfg["training"].get("gradient_accumulation",1)
         aug_cond = not cfg["data"]["augmentation"].get("image_aug",0) or not cfg["data"]["augment"]
-        stt_cond = not cfg["training"]["lr_state_encoder"] and cfg["model"]["state_encoder"].get("backbone_name",None) == "resnet18"
+        stt_cond = cfg["model"]["state_encoder"].get("backbone_name",None) == "resnet18" # and not cfg["training"]["lr_state_encoder"]
         self.use_precalc = cfg["training"].get("use_precalc",False)
         if self.use_precalc:
             assert aug_cond and stt_cond

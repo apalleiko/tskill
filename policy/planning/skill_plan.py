@@ -47,9 +47,10 @@ class TSkillPlan(nn.Module):
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
         # Create pe scaling factors
-        self.src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
+        self.src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
-        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
+        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
 
         # learned embeddings for the 4 input types (state, image, goal)
         self.input_embed = nn.Embedding(3, self.hidden_dim) 
@@ -104,10 +105,12 @@ class TSkillPlan(nn.Module):
         use_precalc = kwargs.get("use_precalc",False)
         if use_precalc and all(x in data.keys() for x in ("img_feat","img_pe")):
             img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
-            img_pe = data["img_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
+            img_pe = data["img_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden) #BUG
         else:
             images = data["rgb"].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
+            data["img_feat"] = img_src.transpose(0,1) # VAE expects (bs, seq, ...)
+            data["img_pe"] = img_pe.transpose(0,1)
 
         ### Goal image or features
         if "goal_feat" in data.keys():
@@ -145,7 +148,7 @@ class TSkillPlan(nn.Module):
             sep_vae_grad = kwargs.get("sep_vae_grad",False)
 
             # Get target skills from vae
-            vae_out = self.vae(data, use_precalc=use_precalc)
+            vae_out = self.vae(data, use_precalc=True)
             
             # Create tgt shifted right 1 token
             z_tgt0 = self.tgt_start_token.repeat(1,BS,1)
@@ -213,8 +216,7 @@ class TSkillPlan(nn.Module):
         state_src = self.src_state_proj(qpos) # (bs, 1|MNS, hidden_dim)
         state_src = self.src_state_norm(state_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
         state_src = state_src + type_embed[0, :, :] # add type 1 embedding
-        # state_pe = torch.zeros_like(state_src, device=self._device) # No pe for current qpos
-        state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2) * self.src_pos_scale_factor
+        state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2) * self.src_qpos_pos_scale_factor
         state_pe = state_pe.repeat(1,bs,1)
 
         # image
@@ -225,7 +227,7 @@ class TSkillPlan(nn.Module):
         img_pe = img_pe.flatten(2,3)
         img_src = img_src.permute(0, 2, 1, 3) # (1|MNS, h*num_cam*w, bs, hidden)
         img_pe = img_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
-        img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.src_pos_scale_factor # (1|MSL, bs, hidden)
+        img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.src_img_pos_scale_factor # (1|MSL, bs, hidden)
         img_pos = img_pos.unsqueeze(1) # (1|MSL, 1, bs, hidden)
         img_src = img_src + img_pos # Add temporal positional encoding
         img_src = img_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
@@ -253,11 +255,10 @@ class TSkillPlan(nn.Module):
 
         # tgt
         tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
-        # TODO ONLY PASSING IN ZEROS FOR TGT
         # tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
         tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2).repeat(1, bs, 1) * self.tgt_pos_scale_factor # (MNS|<, bs, hidden_dim)
         # tgt_pe = torch.zeros_like(tgt, device=self._device)
-        tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs #TODO for all cases?
+        tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs. Padded skills are ignored downstream in loss fcn.
         tgt = tgt + tgt_pe
         tgt = self.tgt_norm(tgt)
 

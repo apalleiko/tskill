@@ -75,7 +75,8 @@ class TSkillCVAE(nn.Module):
         # Create pe scaling factors
         self.enc_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
         self.enc_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
-        self.dec_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.dec_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
 
@@ -352,8 +353,7 @@ class TSkillCVAE(nn.Module):
             state_src = self.dec_input_state_proj(qpos) # (bs, 1|MSL, hidden)
             state_src = self.dec_input_state_norm(state_src).permute(1,0,2) # (1|MSL, bs, hidden)
             state_src = state_src + dec_type_embed[1, :, :] # add type 2 embedding
-            # state_pe = torch.zeros_like(state_src) # no pe, only one obs per decoding step
-            state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_src_pos_scale_factor # (1|MSL, bs, hidden) TODO Add separate param
+            state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_src_qpos_pos_scale_factor # (1|MSL, bs, hidden)
 
             # image, only use one image to decode rest of the skills
             img_src, img_pe = img_info # (1|MSL, bs, num_cam, h*w, c&hidden)
@@ -364,7 +364,7 @@ class TSkillCVAE(nn.Module):
             img_pe = img_pe.flatten(2,3)
             img_src = img_src.permute(0, 2, 1, 3) # (1|MSL, h*num_cam*w, bs, hidden)
             img_pe = img_pe.permute(0, 2, 1, 3)
-            img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.dec_src_pos_scale_factor # (1|MSL, bs, hidden) TODO Add separate param
+            img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2) * self.dec_src_img_pos_scale_factor # (1|MSL, bs, hidden)
             img_pos = img_pos.unsqueeze(1) # (1|MSL, 1, bs, hidden)
             img_src = img_src + img_pos # Add temporal positional encoding
             img_src = img_src.flatten(0,1) # (1|MSL*num_cam*h*w, bs, hidden)

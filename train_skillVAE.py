@@ -102,6 +102,7 @@ def main(args):
 
     is_cuda = torch.cuda.is_available()
     device = torch.device("cuda" if is_cuda else "cpu")
+    print(f"Using device: {device}")
 
     # Shorthands
     if args.bootstrap:
@@ -115,12 +116,12 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 6
-        cfg["training"]["batch_size_alt"] = 6
+        cfg["training"]["batch_size"] = 2
+        cfg["training"]["batch_size_alt"] = 2
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 10
+        cfg["training"]["validate_every"] = 21
         cfg["training"]["checkpoint_every"] = 1000
         cfg["training"]["max_it"] = 20
 
@@ -189,8 +190,9 @@ def main(args):
     lr_decay = cfg["training"].get("lr_decay",1)
     if lr_decay < 1 and lr_decay!=0:
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         if we := cfg["training"].get("lr_warmup_epochs",0) > 0:
-            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=we)
+            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.01, total_iters=we)
             scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler_wu, scheduler],[we])
     else:
         scheduler = None

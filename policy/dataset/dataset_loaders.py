@@ -163,7 +163,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                 elif mode == "libero":
                     trajectory = episodes[f"demo_{idx}"]
                     trajectory = load_h5_data(trajectory)
-                    obs = convert_obs_libero(trajectory["obs"])
+                    obs = convert_obs_libero(trajectory)
 
                 actions = torch.from_numpy(trajectory["actions"]).float()
                 states = torch.from_numpy(obs["state"][:-1]).float()
@@ -332,6 +332,7 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     # kwargs
     save_override = kwargs.get("save_override", False)
     recalc_override = kwargs.get("recalc_override", False)
+    return_dataset = kwargs.get("return_datasets", False)
 
     # Try loading existing data config info pickle file
     path = os.path.join(cfg["training"]["out_dir"],'data_info.pickle')
@@ -349,7 +350,8 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
             print(f"Loading dataset: {i}")
             cfg_i = copy.deepcopy(cfg)
             cfg_i["data"]["dataset"] = i
-            cfg_i["data"]["pad"] = False # Pad in collate fcn
+            if not return_dataset:
+                cfg_i["data"]["pad"] = False # Pad in collate fcn
             train_i, val_i, _ = dataset_loader(cfg_i, multitask=True, data_info=data_info_i, **kwargs)
             train_sequence_datasets.append(train_i)
             val_sequence_datasets.append(val_i)
@@ -403,7 +405,7 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
                 elif mode == "libero":
                     trajectory = episodes[f"demo_{idx}"]
                     trajectory = load_h5_data(trajectory)
-                    obs = convert_obs_libero(trajectory["obs"])
+                    obs = convert_obs_libero(trajectory)
 
                 actions = torch.from_numpy(trajectory["actions"]).float()
                 states = torch.from_numpy(obs["state"][:-1]).float()
@@ -456,7 +458,6 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     val_dataset = MultitaskDataset(val_sequence_datasets)
 
     ### Get extra configs
-    return_dataset = kwargs.get("return_datasets", False)
     if return_dataset:
         return train_dataset, val_dataset
 

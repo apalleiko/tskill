@@ -2,10 +2,10 @@ method: skill
 notes:
 data:
   mode: libero
-  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/KITCHEN_SCENE1_open_the_bottom_drawer_of_the_cabinet_demo.hdf5"
+  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/LIVING_ROOM_SCENE6_put_the_chocolate_pudding_to_the_left_of_the_plate_demo.hdf5"
   val_split: .1
   preshuffle: False
-  max_seq_len: 330
+  max_seq_len: 380
   action_scaling: normal
   state_scaling: 1
   gripper_scaling: False
@@ -16,15 +16,15 @@ data:
     type_masking_rate: 0
   max_count: 50
   indices:
-  full_seq: True
+  full_seq: False
 
 model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
-  z_dim : 200
-  hidden_dim: 256
+  z_dim : 128
+  hidden_dim: 512
   max_skill_len: 10
-  conditional_decode: True
+  conditional_decode: False
   autoregressive_decode: True
   encode_state: True
   encoder_is_causal: True
@@ -32,7 +32,7 @@ model:
   encoder:
     dropout : 0.1
     nheads : 8
-    dim_feedforward : 512
+    dim_feedforward : 1024
     enc_layers : 4
     dec_layers : 6
     pre_norm : False
@@ -40,9 +40,9 @@ model:
   decoder:
     dropout : 0.1
     nheads : 8
-    dim_feedforward : 512
-    enc_layers : 4
-    dec_layers : 6
+    dim_feedforward : 1024
+    enc_layers : 2
+    dec_layers : 3
     pre_norm : False
   
   state_encoder:
@@ -51,25 +51,26 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weights: .001
+  kl_weights: .01
 
 training:
-  out_dir: out/PegInsertion/VAE/007
+  out_dir: out/PegInsertion/VAE/008
   max_it: 1
-  batch_size: 2
-  batch_size_val: 2
-  print_every: 25
-  visualize_every: 1001
-  checkpoint_every: 1001
-  validate_every: 2
+  batch_size: 1
+  batch_size_val: 1
+  print_every: 50
+  visualize_every: 2000
+  checkpoint_every: 2000
+  validate_every: 2000
   backup_every: 1
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.0000
-  lr: 0.000001
-  lr_decay: 0
+  lr_state_encoder: 0.000001
+  lr: .000001
+  lr_decay: 0.995
+  lr_warmup_epochs: 3
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: True

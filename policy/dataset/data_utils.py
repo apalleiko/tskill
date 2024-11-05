@@ -4,6 +4,7 @@ import sklearn.preprocessing as skp
 from torchvision.transforms import v2
 import h5py
 from policy.dataset.masking_utils import get_skill_pad_from_seq_pad
+import numpy as np
 
 # loads h5 data into memory for faster access
 def load_h5_data(data):
@@ -41,7 +42,7 @@ def efficient_collate_fn(batch):
 
     # Get largest size
     max_seq_len = max(sizes)
-    max_seq_len = int(np.ceil(max_seq_len / 10) * 10)
+    max_seq_len = int(np.ceil(max_seq_len / max_skill_len) * max_skill_len)
     for i in range(len(batch)):
         batch[i] = pad2size(batch[i], max_seq_len, max_skill_len)
     
@@ -130,16 +131,14 @@ class DataAugmentation:
         return data
     
     def additive_input_noise(self, data):
-        feat_std = 0.05
-        pos_std = 0.01
+        feat_std = 0.001
+        pos_std = 0.001
         # vel_std = 0.005
         
         val = torch.rand(1)
         if self.input_noise > val:
-            state_dim = data["state"].shape[-1] // 2
             state_noise = torch.randn(data["state"].shape)
-            state_noise[:,:state_dim] = state_noise[:,:state_dim]*pos_std
-            # state_noise[:,state_dim:] = state_noise[:,state_dim:]*vel_std
+            state_noise = state_noise*pos_std
             feat_noise = feat_std*torch.abs(torch.randn(data["img_feat"].shape))
             
             data["state"] = data["state"] + state_noise
@@ -172,12 +171,6 @@ class DataAugmentation:
                     data["goal_pe"] = data["img_pe"][num_seq-1:num_seq,...]
                 else:
                     data["goal"] = data["rgb"][num_seq-1:num_seq,...]
-
-            # Recalculate appropriate masking 
-            # (also start from the begining of the seq)
-            # num_unpad_skills = torch.ceil(torch.clone(num_seq / self.max_skill_len)).to(torch.int16)
-            # data["skill_pad_mask"][num_unpad_skills:] = True
-            # data["seq_pad_mask"][num_seq:] = True
 
         return data
 

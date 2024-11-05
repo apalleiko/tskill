@@ -147,7 +147,7 @@ def main():
     # Model
     model: TSkillCVAE | TSkillPlan = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model_100000.pt")
+    load_dict = checkpoint_io.load("model_best.pt")
     model.to(model._device)
     if method == "plan":
         vae = model.vae
@@ -308,6 +308,7 @@ def main():
                     
             while steps < args.max_steps:
                 current_data = task_dataset.from_obs(obs)
+                current_data["rgb"] = data["rgb"][0,steps,...]
 
                 if "goal_feat" in data.keys():
                     current_data["goal_feat"] = data["goal_feat"]
