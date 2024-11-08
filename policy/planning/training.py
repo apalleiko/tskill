@@ -59,7 +59,6 @@ class Trainer(BaseTrainer):
     def train_step(self, data):
         self.model.train()
         self.optimizer.zero_grad()
-        alt_loss_dict = alt_metric_dict = None
 
         if self.alt_ratio > 0 and (self.step_it + 1) % int(1 / self.alt_ratio) == 0:
             mb_losses, mb_metrics = [], []
@@ -84,7 +83,7 @@ class Trainer(BaseTrainer):
                 del mb_data
 
             loss_dict = {k: np.mean([l[k] for l in mb_losses]) for k in mb_losses[0].keys()}
-            metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])) if "vector" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
+            metric_dict = {k: torch.mean(torch.stack([m[k] for m in mb_metrics])).item() if "vector" not in k else mb_metrics[0][k] for k in mb_metrics[0].keys()}
         else:
             loss_dict, metric_dict = self.compute_loss(data)
 
@@ -169,20 +168,25 @@ class Trainer(BaseTrainer):
         mu_targ = out["vae_out"]["mu"].to(self.device).detach() # (bs, skill_seq, z_dim)
         logvar = out["vae_out"]["logvar"].to(self.device).detach() # (bs, skill_seq, z_dim)
         std_targ = (logvar / 2).exp()
+        latent_targ = out["vae_out"]["latent"].permute(1,0,2).to(self.device).detach() # (bs, skill_seq, z_dim)
 
         # Get unpadded actions
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
         loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        metric_dict["act_plan_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Get unpadded skills
         z_hat_l = z_hat[latent_loss_mask]
         mu_targ_l = mu_targ[latent_loss_mask]
         std_targ_l = std_targ[latent_loss_mask]
+        lat_targ_l = latent_targ[latent_loss_mask]
         # MSE Loss
         # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
         # Squared Mehalanobis distance loss
         loss_dict["z_loss"] = self.z_weight * torch.sum(F.mse_loss(z_hat_l, mu_targ_l, reduction="none") / std_targ_l) / num_latent
+        # Squared latent loss
+        # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, lat_targ_l, reduction="sum") / num_latent
 
         metric_dict["aplan_vector_traj"] = a_hat.detach()
         metric_dict["ahat_vector"] = a_hat_l.detach()

@@ -308,7 +308,8 @@ def main():
                     
             while steps < args.max_steps:
                 current_data = task_dataset.from_obs(obs)
-                current_data["rgb"] = data["rgb"][0,steps,...]
+                # current_data["rgb"] = data["rgb"][:,steps:steps+1,...]
+                # current_data["state"] = data["state"][:,steps:steps+1,...]
 
                 if "goal_feat" in data.keys():
                     current_data["goal_feat"] = data["goal_feat"]

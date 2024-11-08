@@ -116,14 +116,14 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 2
-        cfg["training"]["batch_size_alt"] = 2
+        cfg["training"]["batch_size"] = 8
+        cfg["training"]["batch_size_alt"] = 8
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 21
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 20
+        cfg["training"]["max_it"] = 1
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -164,7 +164,8 @@ def main(args):
     os.makedirs(out_dir, exist_ok=True)
 
     # copy config to output directory
-    shutil.copyfile(user_cfg_path, os.path.join(out_dir, "config.yaml"))
+    if not len(args.config) > 0:
+        shutil.copyfile(user_cfg_path, os.path.join(out_dir, "config.yaml"))
 
     # Dataset
     train_loader, val_loader = dataset_loader(cfg)
@@ -200,16 +201,18 @@ def main(args):
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device, scheduler=scheduler)
     # checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
     checkpoint_io = CheckpointIO(out_dir, model=model)
-    # sim_loss = SimLoss(cfg, val_dataset)
+    if cfg["method"] == "plan":
+        checkpoint_io2 = CheckpointIO(cfg["model"]["vae_path"], model=model.vae)
+        if cfg["method"] == "plan":
+            load_dict_vae = checkpoint_io2.load("model_best.pt")
+            print("Current best VAE validation metric (%s): %.8f"
+            % (model_selection_metric, metric_val_best))
 
-    if args.bootstrap:
-        checkpoint_io.load_model_only(args.ckpt_file)
+    # sim_loss = SimLoss(cfg, val_dataset)
+    try:
+        load_dict = checkpoint_io.load("model.pt")
+    except FileExistsError:
         load_dict = dict()
-    else:
-        try:
-            load_dict = checkpoint_io.load("model.pt")
-        except FileExistsError:
-            load_dict = dict()
 
     epoch_it = load_dict.get("epoch_it", 0)
     it = load_dict.get("it", 0)
@@ -218,10 +221,8 @@ def main(args):
 
     if metric_val_best == np.inf or metric_val_best == -np.inf:
         metric_val_best = -model_selection_sign * np.inf
-    print(
-        "Current best validation metric (%s): %.8f"
-        % (model_selection_metric, metric_val_best)
-    )
+    print("Current best validation metric (%s): %.8f"
+          % (model_selection_metric, metric_val_best))
 
     # Print model
     nparameters = sum(p.numel() for p in model.parameters())

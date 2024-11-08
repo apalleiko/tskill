@@ -6,22 +6,22 @@ data:
   val_split: .1
   preshuffle: False
   max_seq_len: 380
-  augment: False
+  augment: True
   augmentation:
-    subsequence_rate: 0
+    subsequence_rate: 0.8
     image_aug: 0
-    input_noise: .5
+    input_noise: .8
   max_count: 50
   full_seq: False
   full_seq_val: False
   # goal_mode: image
 
 model:
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/008
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/013
   hidden_dim: 512
   dropout : 0.1
-  nheads : 8
-  dim_feedforward : 1024
+  nheads : 16
+  dim_feedforward : 2048
   enc_layers : 4
   dec_layers : 6
   pre_norm : False
@@ -30,16 +30,16 @@ model:
 
 loss:
   z_weight: 1
-  act_weight: 0
+  act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/023
+  out_dir: out/PegInsertion/Plan/028
   train_vae: True
   max_it: 100000
-  batch_size: 12
-  batch_size_val: 12
-  batch_size_alt: 2
-  fraction_alt: 0
+  batch_size: 16
+  batch_size_val: 16
+  batch_size_alt: 8
+  fraction_alt: 0.0
   val_alt: False
   print_every: 50
   visualize_every: 1000
@@ -51,7 +51,7 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0
-  lr: .0001
+  lr: 0.00001
   lr_decay: 0.99
   lr_warmup_epochs: 2
   weight_decay: 0.0001
