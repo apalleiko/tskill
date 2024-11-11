@@ -78,7 +78,7 @@ class LiberoDataset(Dataset):
                  pad: bool=True, augmentation=None,
                  action_scaling=None, state_scaling=None,
                  full_seq: bool = True, autoregressive_decode = False,
-                 encoder_is_causal = False,
+                 encoder_is_causal = False, goal_mode = "image",
                  **kwargs) -> None:
         self.method = method
         self.dataset_file = dataset_file
@@ -93,6 +93,7 @@ class LiberoDataset(Dataset):
         self.full_seq = full_seq
         self.generate_dec_ar_masks = autoregressive_decode
         self.generate_enc_causal_masks = encoder_is_causal
+        self.goal_mode = goal_mode # Either image, or the task vector/embedding to use as the goal instead
         self.add_batch_dim = kwargs.get("add_batch_dim",False)
         self.pad2msl = kwargs.get("pad2msl",False)
         if self.pad2msl:
@@ -142,12 +143,15 @@ class LiberoDataset(Dataset):
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
 
         if self.method == "plan":
-            if use_precalc:
-                data["goal_feat"] = img_feat[-1:,...]
-                data["goal_pe"] = img_pe[-1:,...]
-                # data["goal_pe_plan"] = img_pe2[-1:,...]
+            if self.goal_mode == "image":
+                if use_precalc:
+                    data["goal_feat"] = img_feat[-1:,...]
+                    data["goal_pe"] = img_pe[-1:,...]
+                    # data["goal_pe_plan"] = img_pe2[-1:,...]
+                else:
+                    data["goal"] = rgb[-1:,...]
             else:
-                data["goal"] = rgb[-1:,...]
+                data["goal"] = self.goal_mode
 
         # Add padding to sequences to match lengths and generate padding masks
         if use_precalc:

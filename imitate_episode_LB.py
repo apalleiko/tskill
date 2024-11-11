@@ -20,16 +20,11 @@ from tqdm import tqdm
 from LIBERO.libero.libero import get_libero_path
 from LIBERO.libero.libero.benchmark import get_benchmark
 from LIBERO.libero.libero.envs import OffScreenRenderEnv, SubprocVectorEnv, ControlEnv, DemoRenderEnv
-from LIBERO.libero.libero.utils.time_utils import Timer
-from LIBERO.libero.libero.utils.video_utils import VideoWriter
 from LIBERO.libero.lifelong.algos import *
 from LIBERO.libero.lifelong.metric import (
     raw_obs_to_tensor_obs)
 
 from LIBERO.libero.lifelong.main import get_task_embs
-
-import robomimic.utils.obs_utils as ObsUtils
-import robomimic.utils.tensor_utils as TensorUtils
 
 import time
 import dill as pickle
@@ -147,7 +142,7 @@ def main():
     # Model
     model: TSkillCVAE | TSkillPlan = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
+    load_dict = checkpoint_io.load("model.pt")
     model.to(model._device)
     if method == "plan":
         vae = model.vae
@@ -187,6 +182,7 @@ def main():
     task = benchmark.get_task(args.task_id)
     print("RUNNING ON TASK: ",task.name)
     task_dataset: LiberoDataset = [d for d in dataset.sequence_datasets if task.name in d.dataset_file][0]
+    # Have to toggle dataset padding, because is done in collate function for training
     task_dataset.pad = True
     task_dataset.pad2msl = True
     data_info = data_info["datasets"][task_dataset.dataset_file]

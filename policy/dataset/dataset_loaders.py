@@ -37,9 +37,11 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         if method == "plan":
             cfg_model_vae = cfg["vae_cfg"]["model"]
             cfg_vae = cfg["vae_cfg"]
+            goal_mode = cfg["model"].get("goal_mode","image")
         else:
             cfg_model_vae = cfg["model"]
             cfg_vae = cfg
+            goal_mode = None
         cfg_data = cfg["data"]
         mode = cfg_data.get("mode","maniskill")
         dataset_file: str = cfg_data["dataset"]
@@ -262,8 +264,13 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
             pad2msl_val = True
         else:
             pad2msl_val = False
-
         pad2msl_train = pad2msl_val = False #BUG
+
+        if goal_mode is not None:
+            if goal_mode != "image":
+                goal_mode = data_info.get("task_vec",None)
+                if goal_mode is None:
+                    print("No task vec passed for current goal mode")
 
         ### Create datasets
         if mode == "maniskill":
@@ -276,14 +283,14 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                             pad, train_augmentation,
                             act_scaling, stt_scaling,
                             full_seq, autoregressive_decode, encoder_is_causal,
-                            add_batch_dim=add_batch_dim,
+                            goal_mode, add_batch_dim=add_batch_dim,
                             pad2msl=pad2msl_train)
         val_dataset = ds(method, dataset_file, val_mapping, 
                             max_seq_len, max_skill_len,
                             pad, None,
                             act_scaling, stt_scaling,
                             full_seq_val, autoregressive_decode, encoder_is_causal,
-                            add_batch_dim=add_batch_dim,
+                            goal_mode, add_batch_dim=add_batch_dim,
                             pad2msl=pad2msl_val)
 
         if multitask:
@@ -311,8 +318,10 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     method = cfg["method"]
     if method == "plan":
         cfg_vae = cfg["vae_cfg"]
+        goal_mode = cfg["model"].get("goal_mode","image")
     else:
         cfg_vae = cfg
+        goal_mode = None
     cfg_data = cfg["data"]
     mode = cfg_data.get("mode","maniskill")
     batch_size = cfg["training"]["batch_size"]
@@ -363,14 +372,23 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
     else:
         print("Updating new multitask train & val datasets")
         data_info["datasets"] = dict()
-        for i in dataset_list:
-            assert osp.exists(i)
-            print(f"Loading dataset: {i}")
+        for i in range(len(dataset_list)):
+            d_file_i = dataset_list[i]
+            assert osp.exists(d_file_i)
+            print(f"Loading dataset: {d_file_i}")
             cfg_i = copy.deepcopy(cfg)
-            cfg_i["data"]["dataset"] = i
+            cfg_i["data"]["dataset"] = d_file_i
             cfg_i["data"]["pad"] = False # Pad in collate fcn
             train_i, val_i, data_info_i = dataset_loader(cfg_i, multitask=True, **kwargs)
-            data_info["datasets"][i] = data_info_i
+            # Create one hot task vector
+            task_vec = torch.zeros(len(dataset_list))
+            task_vec[i] = 1
+            data_info_i["task_vec"] = task_vec
+            if goal_mode is not None and goal_mode != "image":
+                print(f"Manually assigning task vec for goal mode: {goal_mode}")
+                train_i.goal_mode = task_vec
+                val_i.goal_mode = task_vec
+            data_info["datasets"][d_file_i] = data_info_i
             train_sequence_datasets.append(train_i)
             val_sequence_datasets.append(val_i)
 
@@ -380,7 +398,9 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
         train_acts = []
         train_states = []
         train_lengths = []
+        k = 0
         for d_file,d_info in data_info["datasets"].items():
+            k += 1
             train_idx = d_info["train_ep_indices"]
             data = h5py.File(d_file, "r")
 
@@ -393,7 +413,7 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
             else:
                 raise ValueError("Unknown data mode passed")
 
-            t = tqdm(range(len(train_idx)), "Collecting all training data info:")
+            t = tqdm(range(len(train_idx)), f"Collecting all training data info, {k}")
             for i in t:
                 idx = train_idx[i]
 

@@ -50,32 +50,32 @@ def efficient_collate_fn(batch):
 
 
 class ScalingFunction:
-    def __init__(self, scaling, data, sep_idx=None) -> None:
+    def __init__(self, scaling, fit_data, sep_idx=None) -> None:
         if isinstance(scaling, (int, float, list, tuple)):
             print("Computing linear scaling")
             self.scaling_for = lambda x: x * torch.tensor(scaling)
             self.scaling_inv = lambda x: x / torch.tensor(scaling)
         elif scaling=="norm":
             print("Computing norm scaling")
-            act_mu = torch.mean(data, 0)
-            act_std = torch.std(data, 0)
+            act_mu = torch.mean(fit_data, 0)
+            act_std = torch.std(fit_data, 0)
             self.scaling_for = lambda x: (x - act_mu) / torch.sqrt(act_std)
             self.scaling_inv = lambda x: x * torch.sqrt(act_std) + act_mu
         elif scaling=="robust_scaler":
             print("Computing robust scaler")
-            scaler = skp.RobustScaler().fit(data)
+            scaler = skp.RobustScaler().fit(fit_data)
             self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
             self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
         elif scaling in ("normal","uniform"):
             print(f"Computing {scaling} quantile transform")
             scaler = skp.QuantileTransformer(output_distribution=scaling)
-            scaler.fit(data)
+            scaler.fit(fit_data)
             self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
             self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
         elif scaling=="power":
             print(f"Computing power transform")
             scaler = skp.PowerTransformer()
-            scaler.fit(data)
+            scaler.fit(fit_data)
             self.scaling_for = lambda x: torch.from_numpy(scaler.transform(x.numpy()))
             self.scaling_inv = lambda x: torch.from_numpy(scaler.inverse_transform(x.numpy()))
         else:

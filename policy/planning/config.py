@@ -61,11 +61,13 @@ def get_model(cfg, device=None):
         freeze_network(vae)
 
     cond_plan = cfg_model.get("conditional_plan",False)
+    goal_mode = cfg_model.get("goal_mode","image")
 
     model = TSkillPlan(
         transformer,
         vae,
         cond_plan,
+        goal_mode,
         device=device
     )
 

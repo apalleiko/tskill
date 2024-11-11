@@ -22,7 +22,7 @@ data:
 model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
-  z_dim : 64
+  z_dim : 32
   hidden_dim: 512
   max_skill_len: 10
   conditional_decode: False
@@ -55,7 +55,7 @@ loss:
   kl_weights: .01
 
 training:
-  out_dir: out/PegInsertion/VAE/013
+  out_dir: out/PegInsertion/VAE/014
   max_it: 2000
   batch_size: 12
   batch_size_val: 12
@@ -71,7 +71,7 @@ training:
   lr_state_encoder: 0.00
   lr: .0001
   lr_decay: 0.99
-  lr_warmup_epochs: 2
+  lr_warmup_epochs: 0
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: True

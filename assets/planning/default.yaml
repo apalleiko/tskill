@@ -14,10 +14,10 @@ data:
   max_count: 50
   full_seq: False
   full_seq_val: False
-  # goal_mode: image
 
 model:
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/013
+  goal_mode: one-hot
+  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/014
   hidden_dim: 512
   dropout : 0.1
   nheads : 16
@@ -33,7 +33,7 @@ loss:
   act_weight: 1
 
 training:
-  out_dir: out/PegInsertion/Plan/028
+  out_dir: out/PegInsertion/Plan/031
   train_vae: True
   max_it: 100000
   batch_size: 16
@@ -51,8 +51,8 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0
-  lr: 0.00001
-  lr_decay: 0.99
-  lr_warmup_epochs: 2
+  lr: 0.0001
+  lr_decay: 0.98
+  lr_warmup_epochs: 0
   weight_decay: 0.0001
   use_precalc: True

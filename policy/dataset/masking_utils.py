@@ -46,33 +46,37 @@ def get_dec_ar_masks(num_img_feats, max_skill_len, device='cpu'):
     return src_mask, mem_mask, tgt_mask
 
 
-def get_plan_ar_masks(num_img_feats, max_num_skills, device='cpu'):
+def get_plan_ar_masks(num_img_feats, max_num_skills, goal_mode, device='cpu'):
     """
     Planning autoregressive masks.
     """
-    plan_src_len = max_num_skills * (1 + num_img_feats) + num_img_feats # (MNS*(q + img_feats) + goal)
+    if goal_mode == "image":
+        goal_tokens = num_img_feats
+    else:
+        goal_tokens = 1
+    plan_src_len = max_num_skills * (1 + num_img_feats) + goal_tokens # (MNS*(q + img_feats) + goal)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
     # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
     mem_mask = torch.ones(max_num_skills, plan_src_len, device=device).to(torch.bool) # Start with everything masked
     src_mask = torch.ones(plan_src_len, plan_src_len, device=device).to(torch.bool) # Start with everything masked
-    src_mask[-num_img_feats:,-num_img_feats:] = False # Unmask goal self attention block
+    src_mask[-goal_tokens:,-goal_tokens:] = False # Unmask goal self attention block
     for s in range(max_num_skills):
         im_begin = max_num_skills
         im_start = max_num_skills + s*num_img_feats
         im_end = im_start + num_img_feats
         q_start = 0
-
+        q_end = s+1
         # Src mask
-        src_mask[s,q_start:s+1] = False # Unmask qpos self attention
-        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
+        src_mask[s,q_start:q_end] = False # Unmask qpos self attention
+        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features attention block(s)
         src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
         src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
-        src_mask[im_start:im_end,-num_img_feats:] = False # Unmask img features attention to goal
-        src_mask[s,-num_img_feats:] = False # Unmask qpos attention to goal
+        src_mask[im_start:im_end,-goal_tokens:] = False # Unmask img features attention to goal
+        src_mask[s,-goal_tokens:] = False # Unmask qpos attention to goal
         # Memory mask
         mem_mask[s,im_begin:im_end] = False # Unmask skill attention to img features
-        mem_mask[s,-num_img_feats:] = False # Unmask skill attention to goal
-        mem_mask[s,q_start:s+1] = False # Unmask skill attention to qpos
+        mem_mask[s,-goal_tokens:] = False # Unmask skill attention to goal
+        mem_mask[s,q_start:q_end] = False # Unmask skill attention to qpos
 
     return src_mask, mem_mask, tgt_mask
 

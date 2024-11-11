@@ -25,11 +25,14 @@ class TSkillPlan(nn.Module):
     def __init__(self, transformer: torch.nn.Transformer, 
                  vae: TSkillCVAE, 
                  conditional_plan,
+                 goal_mode,
                  device, **kwargs):
         """ Initializes the model.
         Parameters:
             transformer: pytorch transformer to use in prediction
             vae: TSkillVAE to use to decode
+            conditional_plan: whether to plan each skill with current conditional image/state info
+            goal_mode: goal mode to use, currently image or one-hot
             device: device to operate on
         """
         super().__init__()
@@ -37,6 +40,7 @@ class TSkillPlan(nn.Module):
         self.transformer = transformer
         self.conditional_plan = conditional_plan
         self.hidden_dim = transformer.d_model
+        self.goal_mode = goal_mode
         self.vae = vae
         self.z_dim = self.vae.z_dim
         self.state_dim = self.vae.state_dim
@@ -51,6 +55,7 @@ class TSkillPlan(nn.Module):
         self.src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.goal_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
 
         # learned embeddings for the 4 input types (state, image, goal)
         self.input_embed = nn.Embedding(3, self.hidden_dim) 
@@ -63,6 +68,13 @@ class TSkillPlan(nn.Module):
         self.image_feat_norm = self.norm([self.num_img_feats, self.hidden_dim])
 
         ### Inputs
+        if self.goal_mode == "image":
+            self.goal_proj = nn.Linear(self.stt_encoder.num_channels, self.hidden_dim)
+            self.goal_feat_norm = self.norm([self.num_img_feats, self.hidden_dim])
+        elif self.goal_mode == "one-hot":
+            self.num_tasks = 90 # Hardcoded
+            self.goal_proj = nn.Linear(self.num_tasks, self.hidden_dim)
+            self.goal_feat_norm = self.norm(self.hidden_dim)
         self.src_state_proj = nn.Linear(self.state_dim, self.hidden_dim)  # project qpos -> hidden
         self.src_state_norm = self.norm(self.hidden_dim)
         self.src_norm = self.norm(self.hidden_dim)
@@ -72,7 +84,6 @@ class TSkillPlan(nn.Module):
         self.z_proj = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent
         self.tgt_z_proj = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
         self.tgt_start_token = nn.Parameter(torch.zeros(1,1,self.z_dim))
-        # self.tgt_start_token = torch.zeros(1,1,self.z_dim)
 
         # Other
         self.metrics = dict()
@@ -113,12 +124,15 @@ class TSkillPlan(nn.Module):
             data["img_pe"] = img_pe.transpose(0,1)
 
         ### Goal image or features
-        if "goal_feat" in data.keys():
-            goal_src = data["goal_feat"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, c)
-            goal_pe = data["goal_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
-        else:
-            goal = data["goal"].to(self._device)
-            goal_src, goal_pe = self.stt_encoder(goal)
+        if self.goal_mode == "image":
+            if "goal_feat" in data.keys():
+                goal_src = data["goal_feat"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, c)
+                goal_pe = data["goal_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
+            else:
+                goal = data["goal"].to(self._device)
+                goal_src, goal_pe = self.stt_encoder(goal)
+        elif self.goal_mode == "one-hot":
+            goal_src, goal_pe = data["goal"].to(self._device), None
 
         num_cam = img_src.shape[2]
 
@@ -130,14 +144,14 @@ class TSkillPlan(nn.Module):
 
         ### Get conditional planning masks if applicable
         if self.conditional_plan:
-            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, device=self._device)
+            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
             if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
                 qpos_plan = qpos_plan[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
                 img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
             goal_info = (goal_src, goal_pe)
         else:
             plan_src_mask = plan_mem_mask = None
-            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, device=self._device)
+            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
             qpos_plan = qpos_plan[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
@@ -206,7 +220,7 @@ class TSkillPlan(nn.Module):
         """
         bs, _, _ = qpos.shape # Use bs for masking
         img_src, img_pe = img_info # (1, bs, num_cam, h*w, c&hidden)
-        goal_src, goal_pe = goal_info # (1, bs, num_cam, h*w, c&hidden)
+        goal_src, goal_pe = goal_info # (1, bs, num_cam, h*w, c&hidden) | (bs, num_tasks)/None
 
         ### type embeddings
         type_embed = self.input_embed.weight * self.input_embed_scale_factor
@@ -215,7 +229,7 @@ class TSkillPlan(nn.Module):
         # position
         state_src = self.src_state_proj(qpos) # (bs, 1|MNS, hidden_dim)
         state_src = self.src_state_norm(state_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
-        state_src = state_src + type_embed[0, :, :] # add type 1 embedding
+        state_src = state_src + type_embed[0, :, :] # add type 1 "state" embedding
         state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2) * self.src_qpos_pos_scale_factor
         state_pe = state_pe.repeat(1,bs,1)
 
@@ -232,19 +246,28 @@ class TSkillPlan(nn.Module):
         img_src = img_src + img_pos # Add temporal positional encoding
         img_src = img_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
         img_pe = img_pe.flatten(0,1)
-        img_src = img_src + type_embed[1, :, :] # add type 2 embedding
+        img_src = img_src + type_embed[1, :, :] # add type 2 "image" embedding
 
         # goal
-        goal_src = self.image_proj(goal_src) # (1, bs, num_cam, h*w, hidden)
-        goal_src = self.image_feat_norm(goal_src)
-        goal_pe = goal_pe * self.img_pe_scale_factor
-        goal_src = goal_src.flatten(2,3) # (1, bs, num_cam*h*w, hidden)
-        goal_pe = goal_pe.flatten(2,3)
-        goal_src = goal_src.permute(0, 2, 1, 3) # (1, h*num_cam*w, bs, hidden)
-        goal_pe = goal_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
-        goal_src = goal_src.flatten(0,1) # (num_cam*h*w, bs, hidden)
-        goal_pe = goal_pe.flatten(0,1)
-        goal_src = goal_src + type_embed[2, :, :] # add type 3 embedding
+        if self.goal_mode == "image":
+            goal_src = self.goal_proj(goal_src) # (1, bs, num_cam, h*w, hidden)
+            goal_src = self.goal_feat_norm(goal_src)
+            goal_pe = goal_pe * self.goal_pe_scale_factor
+            goal_src = goal_src.flatten(2,3) # (1, bs, num_cam*h*w, hidden)
+            goal_pe = goal_pe.flatten(2,3)
+            goal_src = goal_src.permute(0, 2, 1, 3) # (1, h*num_cam*w, bs, hidden)
+            goal_pe = goal_pe.permute(0, 2, 1, 3) # sinusoidal skill pe
+            goal_src = goal_src.flatten(0,1) # (num_cam*h*w, bs, hidden)
+            goal_pe = goal_pe.flatten(0,1)
+            goal_src = goal_src + type_embed[2, :, :] # add type 3 embedding
+        elif self.goal_mode == "one-hot":
+            goal_src = self.goal_proj(goal_src) # (bs, hidden)
+            goal_src = self.goal_feat_norm(goal_src)
+            goal_src = goal_src.unsqueeze(0) # (1, bs, hidden)
+            goal_src = goal_src + type_embed[2, :, :] # add type 3 "goal" embedding
+            goal_pe = torch.zeros_like(goal_src)
+        else:
+            raise ValueError("Unknown goal mode encountered")
 
         # src
         src = torch.cat([state_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats|*MNS, bs, hidden_dim)

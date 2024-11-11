@@ -113,6 +113,8 @@ class ManiSkillrgbSeqDataset(Dataset):
         else:
             self.state_scaling = state_scaling
 
+        raise TypeError("Out of date!")
+
     def __len__(self):
         return len(self.owned_indices)
 

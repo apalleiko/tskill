@@ -205,8 +205,9 @@ def main(args):
         checkpoint_io2 = CheckpointIO(cfg["model"]["vae_path"], model=model.vae)
         if cfg["method"] == "plan":
             load_dict_vae = checkpoint_io2.load("model_best.pt")
-            print("Current best VAE validation metric (%s): %.8f"
-            % (model_selection_metric, metric_val_best))
+            vae_val_best = load_dict_vae.get("loss_val_best", -model_selection_sign * np.inf)
+            print("Current best VAE validation metric: %.8f"
+            % (vae_val_best))
 
     # sim_loss = SimLoss(cfg, val_dataset)
     try:
