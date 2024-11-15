@@ -128,162 +128,7 @@ class ManiSkillDataset(Dataset):
         return trajectory
 
 
-class ManiSkillConvONetDataSet(ManiSkillDataset):
-    """Class that preps data for ConvONet processing"""
-    def __init__(self, dataset_file: str, indices: list = None, 
-                 max_seq_len: int = 0, pad: bool = False, 
-                 augmentation= None, single_cam: bool = False,
-                 camera: int = 0) -> None:
-        self.dataset_file = dataset_file
-        self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
-        
-        self.max_seq_len = max_seq_len
-        self.pad = pad
-        self.augmentation = augmentation
-        self.single_cam = single_cam
-        self.camera = camera
-
-    def __len__(self):
-        return len(self.owned_indices)
-
-    def __getitem__(self, idx):
-        eps = self.episodes[self.owned_indices[idx]]
-        trajectory = self.data[f"traj_{eps['episode_id']}"]
-        trajectory = load_h5_data(trajectory)
-
-        # convert the original raw observation with our batch-aware function
-        obs = convert_observation(trajectory["obs"])
-        
-        # we use :-1 to ignore the last obs as terminal observations are included
-        rgbd = obs["rgbd"][:-1]
-        rgbd = rescale_rgbd(rgbd, separate_cams=True)
-        rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
-        rgbd = rgbd.tolist()
-        for seq, seq_data in tqdm(enumerate(rgbd)):
-            if self.single_cam:
-                rgbd[seq][self.camera] = generate_input_vector(rgbd[seq][self.camera])
-            else:
-                for cam, cam_data in enumerate(seq_data):
-                    rgbd[seq][cam] = generate_input_vector(cam_data)
-        
-        rgbd = torch.tensor(rgbd).float()
-
-        # Add padding to sequences to match lengths and generate padding masks
-        if self.pad:
-            num_unpad_seq = rgbd.shape[0]
-            pad = self.max_seq_len - num_unpad_seq
-            seq_pad_mask = torch.cat((torch.zeros(rgbd.shape[0]), torch.ones(pad)), axis=0).to(torch.bool)
-
-            rgbd_pad = torch.zeros([pad] + list(rgbd.shape[1:]))
-            
-            rgbd = torch.cat((rgbd, rgbd_pad), axis=0).to(torch.float32)
-
-        else: # If not padding, this is being passed directly to model. 
-            seq_pad_mask = torch.zeros(rgbd.shape[0]).to(torch.bool)
-            
-        # Assume no masking for now
-        seq_mask = torch.zeros(seq_pad_mask.shape[-1], seq_pad_mask.shape[-1]).to(torch.bool)
-        
-        data = dict(rgbd=rgbd, seq_pad_mask=seq_pad_mask, seq_mask=seq_mask)
-        
-        if self.augmentation is not None:
-            data = self.augmentation(data)
-
-        if not self.pad: # Add extra dimension for "batch", so model runs properly when testing.
-            for k,v in data.items():
-                data[k] = v.unsqueeze(0)
-
-        return data
-
-
-class ManiSkillConvONetDataset_V2(ManiSkillDataset):
-    def __init__(self, dataset_file: str, ground_truth_file: str, indices: list = None, 
-                 max_seq_len: int = 0) -> None:
-        self.dataset_file = dataset_file
-        self.data = h5py.File(dataset_file, "r")
-        json_path = dataset_file.replace(".h5", ".json")
-        self.json_data = load_json(json_path)
-        self.episodes = self.json_data["episodes"]
-        self.env_info = self.json_data["env_info"]
-        self.env_id = self.env_info["env_id"]
-        self.env_kwargs = self.env_info["env_kwargs"]
-        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
-
-        # load the ground_truth file
-        self.ground_truth_file = ground_truth_file
-        self.gt_data = h5py.File(ground_truth_file, "r")
-        gt_json_path = ground_truth_file.replace(".h5", ".json")
-        self.gt_json_data = load_json(gt_json_path)
-        self.gt_episodes = self.gt_json_data["episodes"]
-        self.gt_env_info = self.gt_json_data["env_info"]
-        self.gt_env_id = self.gt_env_info["env_id"]
-        self.gt_env_kwargs = self.gt_env_info["env_kwargs"]
-        self.gt_owned_indices = indices if indices is not None else list(range(len(self.gt_episodes)))
-
-        # input map - keys are location, items are image info (episode, sequence, camera):transformed image data
-        self.datamap = dict()
-
-        for i, idx in enumerate(indices):
-            eps = self.episodes[self.owned_indices[i]]
-            trajectory = self.data[f"traj_{eps['episode_id']}"]
-            trajectory = load_h5_data(trajectory)
-
-            # shadow for gt
-            gt_eps = self.gt_episodes[self.gt_owned_indices[i]]
-            gt_trajectory = self.gt_data[f"traj_{gt_eps['episode_id']}"]
-            gt_trajectory = load_h5_data(gt_trajectory)
-
-            # convert the original raw observation with our batch-aware function
-            obs = convert_observation(trajectory["obs"])
-            
-            # we use :-1 to ignore the last obs as terminal observations are included
-            rgbd = obs["rgbd"][:-1]
-            rgbd = rescale_rgbd(rgbd, separate_cams=True)
-            rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
-            for seq, seq_data in tqdm(enumerate(rgbd)):
-                for cam in range(len(seq_data)):
-                    input_data = torch.tensor(generate_input_vector(rgbd[seq][cam])).float()
-
-                    # create gt mapping
-                    lb = 16384*cam
-                    ub = 16384*(cam+1)
-                    gt_points = torch.tensor(gt_trajectory["obs"]["pointcloud"]["xyzw"][seq, lb:ub, :]).float()
-                    if cam == 0:
-                        camera = "base_camera"
-                    if cam == 1:
-                        camera = "extra_cam1"
-                    if cam == 2:
-                        camera = "extra_cam2"
-                    if cam == 3:
-                        camera = "hand_camera"
-
-                    cam2world = trajectory["obs"]["camera_param"][camera]["cam2world_gl"][seq]
-                    inv_cam2world = np.linalg.inv(cam2world)
-
-                    # gt_points = np.matmul(gt_points, inv_cam2world)[..., 0:3]
-                    gt_colors = torch.tensor(gt_trajectory["obs"]["pointcloud"]["rgb"][seq, lb:ub, 0:3]).int()
-
-                    self.datamap[(idx, seq, cam)] = dict(input_data=input_data, gt_points=gt_points, gt_colors=gt_colors)
-
-        
-    def __len__(self):
-        return len(self.datamap.keys())
-    
-    def __getitem__(self, idx):
-        # access inputs
-        ep, seq, cam = list(self.datamap.keys())[idx]
-        
-        return self.datamap[(ep, seq, cam)]
-    
-
-class ManiSkillConvONetDataset_V3(ManiSkillDataset):
+class ConvONetDataset(ManiSkillDataset):
     def __init__(self, dataset_file: str, indices: list = None, max_seq_len: int = 0) -> None:
         self.dataset_file = dataset_file
         data = h5py.File(dataset_file, "r")
@@ -319,24 +164,12 @@ class ManiSkillConvONetDataset_V3(ManiSkillDataset):
                     points = inputs[..., 0:3]
                     occ = torch.where(points[..., 2] > 0, 1, 0).float()
                     
-                    cam_info = None
-                    if cam == 0:
-                        camera = "base_camera"
-                    if cam == 1:
-                        camera = "extra_cam1"
-                    if cam == 2:
-                        camera = "extra_cam2"
-                    if cam == 3:
-                        camera = "hand_camera"
-                    
-                    # cam_info = trajectory["obs"]["camera_param"][camera][seq]
-                    
-
                     # needs points, occ, inputs
                     self.datamap[(idx, seq, cam)] = {"inputs": inputs, 
                                                     "points" : points,
                                                     "occ": occ,
                                                     }
+                    
     def __len__(self):
         return len(self.datamap.keys())
     
@@ -345,75 +178,14 @@ class ManiSkillConvONetDataset_V3(ManiSkillDataset):
         return self.datamap[(ep, seq, cam)]
     
 
-
-def get_MS_loaders_V3(cfg,  **kwargs) -> None:
-        cfg_data = cfg["data"]
-        dataset_file: str = cfg_data["dataset"]
-        val_split: float = cfg_data.get("val_split", 0.5)
-        preshuffle: bool = cfg_data.get("preshuffle", True)
-        count = cfg_data.get("max_count", None) # Dataset count limitations
-
-        assert os.path.exists(dataset_file)
-        
-        json_path = dataset_file.replace(".h5", ".json")
-        json_data = load_json(json_path)
-        episodes = json_data["episodes"]
-        
-        # Limit number of loaded episodes if needed
-        num_episodes = len(episodes)
-        if count is not None:
-            assert count <= num_episodes
-            num_episodes = count           
-
-        # Try loading exiting train/val split indices
-        existing_indices = kwargs.get("indices", None)
-        path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
-        
-        if existing_indices is None:
-            indices = list(range(num_episodes))
-            
-            # Shuffle the index list for train/val split
-            if preshuffle:
-                np.random.shuffle(indices)
-
-            # Train/Val split
-            split_idx = int(np.floor(num_episodes*val_split))
-            train_idx = indices[:num_episodes-split_idx]
-            val_idx = indices[num_episodes-split_idx:]
-
-        print("Training Indices: " + str(train_idx))
-        print("Validation Indices: " + str(val_idx))
-
-        # Create datasets
-        train_dataset = ManiSkillConvONetDataset_V3(dataset_file, train_idx)
-        val_dataset = ManiSkillConvONetDataset_V3(dataset_file, val_idx)
-
-        if kwargs.get("return_datasets", False):
-            return train_dataset, val_dataset
-
-        # Create loaders
-        shuffle = kwargs.get("shuffle", True)
-        print(f"Shuffling: {shuffle}")
-        train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
-                                   num_workers=cfg["training"]["n_workers"], 
-                                   pin_memory=True, drop_last=False, shuffle=shuffle)
-        val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
-                                 num_workers=cfg["training"]["n_workers_val"], 
-                                 pin_memory=True, drop_last=False, shuffle=shuffle)
-        
-        return train_loader, val_loader
-
-
 def get_MS_loaders(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
-        gt_file: str = cfg_data["ground_truth"]
         val_split: float = cfg_data.get("val_split", 0.5)
         preshuffle: bool = cfg_data.get("preshuffle", True)
         count = cfg_data.get("max_count", None) # Dataset count limitations
 
         assert os.path.exists(dataset_file)
-        assert os.path.exists(gt_file)
         
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
@@ -445,8 +217,8 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         print("Validation Indices: " + str(val_idx))
 
         # Create datasets
-        train_dataset = ManiSkillConvONetDataset_V2(dataset_file,gt_file, train_idx)
-        val_dataset = ManiSkillConvONetDataset_V2(dataset_file, gt_file, val_idx)
+        train_dataset = ConvONetDataset(dataset_file, train_idx)
+        val_dataset = ConvONetDataset(dataset_file, val_idx)
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset
@@ -463,245 +235,8 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         
         return train_loader, val_loader
 
-
-def get_scaling_functions(data, scaling, sep_idx):
-    if isinstance(scaling, (int, float, list, tuple)):
-        print("Computing linear scaling")
-        def action_scaling(x):
-            return x * torch.tensor(scaling)
-        def action_scaling_inv(x):
-            return x / torch.tensor(scaling)
-    elif scaling=="norm": 
-        print("Computing action norm")
-        act_mu = torch.mean(data, 0)
-        act_std = torch.std(data, 0)
-        def action_scaling(x):
-            return (x - act_mu) / torch.sqrt(act_std)
-        def action_scaling_inv(x):
-            return x * torch.sqrt(act_std) + act_mu
-    elif scaling=="robust_scaler":
-        print("Computing robust scaler")
-        scaler = skp.RobustScaler().fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    elif scaling in ("normal","uniform"):
-        print(f"Computing {scaling} quantile transform")
-        scaler = skp.QuantileTransformer(output_distribution=scaling)
-        scaler.fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    elif scaling=="power":
-        print(f"Computing power transform")
-        scaler = skp.PowerTransformer()
-        scaler.fit(data)
-        def action_scaling(x):
-            return torch.from_numpy(scaler.transform(x.numpy()))
-        def action_scaling_inv(x):
-            return torch.from_numpy(scaler.inverse_transform(x.numpy()))
-    else:
-        raise ValueError(f"Unsupported action scaling given: {scaling}")
-
-    if sep_idx is not None:
-        def seperate_scaling(function, x, idx):
-            return torch.hstack((function(x[:,:idx]), x[:,idx:]))
-        scaling_fcn_forward = lambda x: seperate_scaling(action_scaling, x, sep_idx)
-        scaling_fcn_inverse = lambda x: seperate_scaling(action_scaling_inv, x, sep_idx)
-    else:
-        scaling_fcn_forward = action_scaling
-        scaling_fcn_inverse = action_scaling_inv
-
-    return scaling_fcn_forward, scaling_fcn_inverse
-
-
-class DataAugmentation:
-    def __init__(self, cfg) -> None:
-        self.max_seq_len = cfg["data"]["max_seq_len"]
-        self.max_skill_len = cfg["model"]["max_skill_len"]
-        self.masking_rate = cfg["data"]["augmentation"].get("masking_rate", 0)
-        self.subsequence_rate = cfg["data"]["augmentation"].get("subsequence_rate", 0)
-
-    def __call__(self, data):
-        seq_pad_mask = data["seq_pad_mask"]
-        num_unpad_seq = torch.sum(torch.logical_not(seq_pad_mask).to(torch.int16))
-
-        val = torch.rand(1)
-        if self.subsequence_rate > val and self.subsequence_rate > 0:
-            # Uniformly sample how much of the sequence to use for the batch
-            # from 1 to entire (unpadded) seq
-            num_seq = torch.randint(1, num_unpad_seq+1, (1,1)).squeeze()
-
-            # Pick a random index to start at in the possible window
-            # TODO Start at least max_skill_len away from the end of each demo in the batch?
-            # As is, it is biased towards smaller sequences
-            buffer = self.max_seq_len - num_unpad_seq
-            seq_idx_start = torch.randint(0, buffer+1, (1,1)).squeeze()
-            seq_idx_end = seq_idx_start + num_seq
-            
-            # Reset "new" sequences to the beginning (for positional encodings)
-            for k,v in data.items():
-                if k not in ("skill_pad_mask", "skill_mask", "seq_pad_mask"):
-                    new_seq = torch.zeros_like(v)
-                    new_seq[:num_seq,...] = v[seq_idx_start:seq_idx_end,...]
-                    data[k] = new_seq
-
-            # Recalculate appropriate masking 
-            # (also start from the begining of the seq)
-            num_unpad_skills = torch.ceil(torch.clone(num_seq / self.max_skill_len)).to(torch.int16)
-            data["skill_pad_mask"][num_unpad_skills:] = True
-            data["seq_pad_mask"][num_seq:] = True
-
-        if self.masking_rate > 0:
-            raise NotImplementedError # TODO
-
-        return data
-
-
-import matplotlib.animation as animation
-# import open3d as o3d
-# import trimesh
-
 if __name__ == "__main__":
-    path = "tskill/data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-    # dataset = ManiSkillConvONetDataset_V2(path, indices=[0])
-    dataset = ManiSkillDataset(path)
-
-    animate = False
-    pointcloud = False
-    trimesh_demo = False
-    data_conversion = False
-    save_data = False
-
-    if save_data:
-        data = dataset[0]["rgbd"][0][0]
-        data = tensor_to_numpy(data)
-        cam1 = data[0]
-        cam2 = data[1]
-        
-        # file name, arrayname, arraydata
-        np.savez("test_data", cam1=cam1, cam2=cam2)
-    
-
-    if data_conversion:
-        episode = dataset[0]["rgbd"]
-        batch = episode[0]
-        scene = batch[100]
-        cam = scene[0]
-        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
-        depth_map = tensor_to_numpy(cam[3, :, :])
-        h, w = depth_map.shape
-        input_vec = []
-
-        for u in range(h):
-            for v in range(w):
-                x, y, z = pixelToCoordinate([u, v, depth_map[u, v]])
-                R = img[u, v, 0]
-                G = img[u, v, 1]
-                B = img[u, v, 2]
-
-                input_vec.append([x, y, z, R, G, B])
-        
-        input_vec = np.array(input_vec, dtype=np.float32)
-        print(input_vec.shape)
-
-
-    if trimesh_demo:
-        episode = dataset[0]["rgbd"]
-        batch = episode[0]
-        scene = batch[100]
-        cam = scene[1]
-        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
-        depth_map = tensor_to_numpy(cam[3, :, :])
-        print(min(depth_map[-1, :]))
-        
-        depth_map_reform = []
-
-        row, col = depth_map.shape
-        for r in range(row):
-            for c in range(col):
-                vertex = [r, c, depth_map[r][c]]
-                depth_map_reform.append(vertex)
-
-        # depth_map_reform = np.array(depth_map_reform)
-        # print(depth_map_reform)
-
-        # mesh  = trimesh.Trimesh(depth_map_reform)
-        # print(mesh.vertices)
-        # print(mesh.vertex_normals)
-        
-
-    if pointcloud:
-        episode = dataset[0]["rgbd"]
-        batch = episode[0]
-        scene = batch[100]
-        cam = scene[1]
-        img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
-        depth_map = tensor_to_numpy(cam[3, :, :])
-        
-        # Intrinsic camera parameters (example values)
-        fx = 100.0  # Focal length in x
-        fy = 100.0  # Focal length in y
-        cx = 64   # Principal point x
-        cy = 64   # Principal point y
-
-        # Generate 3D points
-        height, width = depth_map.shape
-        i, j = np.meshgrid(np.arange(width), np.arange(height))
-        z = depth_map
-        x = (j - cx) * z / fx
-        y = (i - cy) * z / fy
-        points = np.stack((x, y, z), axis=-1).reshape(-1, 3)
-
-        # Generate colors
-        colors = img.reshape(-1, 3) / 255.0
-
-        # Create Open3D point cloud object
-        # pcd = o3d.geometry.PointCloud()
-        # pcd.points = o3d.utility.Vector3dVector(points)
-        # # pcd.colors = o3d.utility.Vector3dVector(colors)
-
-        # # Visualize the point cloud
-        # o3d.visualization.draw_geometries([pcd])
-    
-
-    if animate:
-        # Create a figure and axis
-        fig, ax = plt.subplots()
-
-        # Generate a series of images
-        images = []
-
-        episode = dataset[0]["obs"]["image"]["base_camera"]["rgb"]
-        # print(episode)
-        for scene in episode:
-            # img = tensor_to_numpy(torch.permute(torch.tensor(scene), (1, 2, 0)))
-            images.append(scene)
-
-        # Initialize the image
-        im = ax.imshow(images[0])
-
-        # Function to update the image
-        def update(frame):
-            im.set_array(images[frame])
-            return im,
-
-        # Create the animation
-        ani = animation.FuncAnimation(
-            fig,        # The figure object
-            update,     # The update function
-            frames=len(images),  # Number of frames
-            interval=100,  # Interval in milliseconds
-            blit=True    # Use blitting to optimize drawing
-        )
-
-        # Display the animation
-        ani.save("base_cam_ani.gif")
-        plt.show()
-
-
+    None
     ### Commands for trajectory replay ###
     # python -m mani_skill2.trajectory.replay_trajectory   --traj-path /home/mrl/Documents/Projects/tskill/data/demos/v0/rigid_body/PegInsertionSide-v0/trajectory.h5   --save-traj --target-control-mode pd_joint_delta_pos --obs-mode rgbd --num-procs 10
     # python -m policy/dataset/replay_trajectory.py --traj-path data/demos/v0/rigid_body/StackCube-v0/trajectory.h5 --save-traj --obs-mode rgbd --target-control-mode pd_joint_delta_pos --num-procs 2 --cam-res 480
