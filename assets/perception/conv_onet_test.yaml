@@ -2,12 +2,13 @@ method: conv_onet
 
 data:
   input_type: pointcloud
-  dataset: data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5
+  dataset: data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos_gt.h5
+  ground_truth: data/demos/PegInsertionSide-v0/trajectory.pointcloud.pd_joint_delta_pos_gt.h5
   pointcloud_n: 16348
   pointcloud_noise: 0.005
   points_subsample: 2048
   padding: false
-  max_count: 10
+  max_count: 3
 
 model:
   encoder: pointnet_local_pool

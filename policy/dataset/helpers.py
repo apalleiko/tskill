@@ -31,7 +31,7 @@ def pixelToCoordinate(point, camera_params=None):
     
     u, v, d = point
 
-    X = float((u - c) * d / fx)
-    Y = float((v - c) * d /fy)
+    X = float((u + c) * d / fx)
+    Y = float((v + c) * d /fy)
     Z = float(d)
     return np.array([X, Y, Z])

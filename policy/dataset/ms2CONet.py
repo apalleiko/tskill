@@ -1,19 +1,6 @@
 # Import required packages
 # Unless otherwise stated, copy/pasted from ms2dataset
 
-"""
-convert data to index map:image data
-
-get the mesh
-convert to occ np array
-use trimesh
-
-do the camera data transform to global coords
-
-
-check by plotting over eachother
-"""
-
 import os
 import os.path
 import h5py
@@ -28,12 +15,9 @@ import dill as pickle
 # if causing issues, check this
 import sklearn.preprocessing as skp
 
-
-# Below are commented out mani skill functions that I can't load
-# If there are functions below they are replicated mani skill functions
 from policy.dataset.helpers import load_json, pixelToCoordinate
+# Below are commented out mani skill functions that I can't load
 # from mani_skill2.utils.io_utils import load_json
-# from mani_skill2.utils.common import flatten_state_dict
 
 
 def tensor_to_numpy(x):
@@ -98,10 +82,6 @@ def load_h5_data(data):
 def generate_input_vector(cam):
     """
     Takes rgbd data from one camera and returns all points in list of 1x6 data vectors
-    Given u,v,d pixel coordinates and returns x,y,z reference frame coordinates for that point
-    followed by the corresponding RGB values.
-
-    Should only be used right before input into ConvONet
     """
     cam = np.array(cam)
 
@@ -115,12 +95,13 @@ def generate_input_vector(cam):
 
     for u in range(h):
         for v in range(w):
-            x, y, z = pixelToCoordinate([u, v, depth_map[u, v]])
+            # x, y, z = pixelToCoordinate([u, v, depth_map[u, v]])
+            z = depth_map[u, v]
             R = img[u, v, 0]
             G = img[u, v, 1]
             B = img[u, v, 2]
 
-            input_vec.append([x, y, z, R, G, B])
+            input_vec.append([u, v, z, R, G, B])
     
     return input_vec
 
@@ -223,7 +204,7 @@ class ManiSkillConvONetDataSet(ManiSkillDataset):
 
 
 class ManiSkillConvONetDataset_V2(ManiSkillDataset):
-    def __init__(self, dataset_file: str, indices: list = None, 
+    def __init__(self, dataset_file: str, ground_truth_file: str, indices: list = None, 
                  max_seq_len: int = 0) -> None:
         self.dataset_file = dataset_file
         self.data = h5py.File(dataset_file, "r")
@@ -235,13 +216,29 @@ class ManiSkillConvONetDataset_V2(ManiSkillDataset):
         self.env_kwargs = self.env_info["env_kwargs"]
         self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
 
+        # load the ground_truth file
+        self.ground_truth_file = ground_truth_file
+        self.gt_data = h5py.File(ground_truth_file, "r")
+        gt_json_path = ground_truth_file.replace(".h5", ".json")
+        self.gt_json_data = load_json(gt_json_path)
+        self.gt_episodes = self.gt_json_data["episodes"]
+        self.gt_env_info = self.gt_json_data["env_info"]
+        self.gt_env_id = self.gt_env_info["env_id"]
+        self.gt_env_kwargs = self.gt_env_info["env_kwargs"]
+        self.gt_owned_indices = indices if indices is not None else list(range(len(self.gt_episodes)))
+
         # input map - keys are location, items are image info (episode, sequence, camera):transformed image data
         self.datamap = dict()
-        
+
         for i, idx in enumerate(indices):
             eps = self.episodes[self.owned_indices[i]]
             trajectory = self.data[f"traj_{eps['episode_id']}"]
             trajectory = load_h5_data(trajectory)
+
+            # shadow for gt
+            gt_eps = self.gt_episodes[self.gt_owned_indices[i]]
+            gt_trajectory = self.gt_data[f"traj_{gt_eps['episode_id']}"]
+            gt_trajectory = load_h5_data(gt_trajectory)
 
             # convert the original raw observation with our batch-aware function
             obs = convert_observation(trajectory["obs"])
@@ -252,30 +249,104 @@ class ManiSkillConvONetDataset_V2(ManiSkillDataset):
             rgbd = rgbd.transpose((0, 4, 3, 1, 2)) # (seq, num_cams, channels, img_h, img_w)
             for seq, seq_data in tqdm(enumerate(rgbd)):
                 for cam in range(len(seq_data)):
-                    self.datamap[(idx, seq, cam)] = generate_input_vector(rgbd[seq][cam])
+                    input_data = torch.tensor(generate_input_vector(rgbd[seq][cam])).float()
+
+                    # create gt mapping
+                    lb = 16384*cam
+                    ub = 16384*(cam+1)
+                    gt_points = torch.tensor(gt_trajectory["obs"]["pointcloud"]["xyzw"][seq, lb:ub, :]).float()
+                    if cam == 0:
+                        camera = "base_camera"
+                    if cam == 1:
+                        camera = "extra_cam1"
+                    if cam == 2:
+                        camera = "extra_cam2"
+                    if cam == 3:
+                        camera = "hand_camera"
+
+                    cam2world = trajectory["obs"]["camera_param"][camera]["cam2world_gl"][seq]
+                    inv_cam2world = np.linalg.inv(cam2world)
+
+                    # gt_points = np.matmul(gt_points, inv_cam2world)[..., 0:3]
+                    gt_colors = torch.tensor(gt_trajectory["obs"]["pointcloud"]["rgb"][seq, lb:ub, 0:3]).int()
+
+                    self.datamap[(idx, seq, cam)] = dict(input_data=input_data, gt_points=gt_points, gt_colors=gt_colors)
+
         
     def __len__(self):
         return len(self.datamap.keys())
     
     def __getitem__(self, idx):
+        # access inputs
         ep, seq, cam = list(self.datamap.keys())[idx]
-        inputs = torch.tensor(self.datamap[(ep, seq, cam)]).float()
-
-        # eps = self.episodes[self.owned_indices[loc[0]]]
-        # trajectory = self.data[f"traj_{eps['episode_id']}"]
-        # trajectory = load_h5_data(trajectory)
-        # get the ground truth from ep seq, cam
-        # ground_truth = trajectory["truth"][seq][cam]
-
-        data = dict(inputs=inputs)
         
-        # for k,v in data.items():
-        #         data[k] = v.unsqueeze(0)
-
-        return data
+        return self.datamap[(ep, seq, cam)]
     
 
-def get_MS_loaders(cfg,  **kwargs) -> None:
+class ManiSkillConvONetDataset_V3(ManiSkillDataset):
+    def __init__(self, dataset_file: str, indices: list = None, max_seq_len: int = 0) -> None:
+        self.dataset_file = dataset_file
+        data = h5py.File(dataset_file, "r")
+        json_path = dataset_file.replace(".h5", ".json")
+        self.json_data = load_json(json_path)
+        self.episodes = self.json_data["episodes"]
+        self.env_info = self.json_data["env_info"]
+        self.env_id = self.env_info["env_id"]
+        self.env_kwargs = self.env_info["env_kwargs"]
+        self.owned_indices = indices if indices is not None else list(range(len(self.episodes)))
+
+        # create datamap
+        self.datamap = dict()
+
+        # process input data into 
+        for i, idx in enumerate(indices):
+            eps = self.episodes[self.owned_indices[i]]
+            trajectory = data[f"traj_{eps['episode_id']}"]
+            trajectory = load_h5_data(trajectory)
+
+            # convert the original raw observation with our batch-aware function
+            obs = convert_observation(trajectory["obs"])
+            
+            # we use :-1 to ignore the last obs as terminal observations are included
+            rgbd = obs["rgbd"][:-1]
+            rgbd = rescale_rgbd(rgbd, separate_cams=True)
+            rgbd = rgbd.transpose((0, 4, 3, 2, 1)) # (seq, num_cams, channels, img_h, img_w)
+            for seq, seq_data in tqdm(enumerate(rgbd)):
+                for cam, cam_data in enumerate(seq_data):
+
+                    # need to change to x,y,d, RGB
+                    inputs = torch.tensor(generate_input_vector(cam_data)).float()
+                    points = inputs[..., 0:3]
+                    occ = torch.where(points[..., 2] > 0, 1, 0).float()
+                    
+                    cam_info = None
+                    if cam == 0:
+                        camera = "base_camera"
+                    if cam == 1:
+                        camera = "extra_cam1"
+                    if cam == 2:
+                        camera = "extra_cam2"
+                    if cam == 3:
+                        camera = "hand_camera"
+                    
+                    # cam_info = trajectory["obs"]["camera_param"][camera][seq]
+                    
+
+                    # needs points, occ, inputs
+                    self.datamap[(idx, seq, cam)] = {"inputs": inputs, 
+                                                    "points" : points,
+                                                    "occ": occ,
+                                                    }
+    def __len__(self):
+        return len(self.datamap.keys())
+    
+    def __getitem__(self, idx):
+        ep, seq, cam = list(self.datamap.keys())[idx]
+        return self.datamap[(ep, seq, cam)]
+    
+
+
+def get_MS_loaders_V3(cfg,  **kwargs) -> None:
         cfg_data = cfg["data"]
         dataset_file: str = cfg_data["dataset"]
         val_split: float = cfg_data.get("val_split", 0.5)
@@ -283,7 +354,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         count = cfg_data.get("max_count", None) # Dataset count limitations
 
         assert os.path.exists(dataset_file)
-        data = h5py.File(dataset_file, "r")
+        
         json_path = dataset_file.replace(".h5", ".json")
         json_data = load_json(json_path)
         episodes = json_data["episodes"]
@@ -292,29 +363,7 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
         num_episodes = len(episodes)
         if count is not None:
             assert count <= num_episodes
-            num_episodes = count
-
-        # If a max sequence length isn't passed need to find it from the data to allow batching
-        # max_seq_len = cfg_data.get("max_seq_len", 0)
-        
-        # if not max_seq_len:
-        #     print("Computing max sequence length...")
-        #     for idx in tqdm(range(num_episodes)):
-        #         eps = episodes[idx]
-        #         trajectory = data[f"traj_{eps['episode_id']}"]
-        #         trajectory = load_h5_data(trajectory)
-        #         seq_size = trajectory["obs"]["image"]["base_camera"]["rgb"].shape[0] - 1
-        #         if seq_size > max_seq_len:
-        #             max_seq_len = seq_size
-        #     print("Max sequence length found to be: ", max_seq_len)
-
-        
-        print("Collecting all observations...")
-        for idx in tqdm(range(num_episodes)):
-            eps = episodes[idx]
-            trajectory = data[f"traj_{eps['episode_id']}"]
-            trajectory = load_h5_data(trajectory)
-            obs = convert_observation(trajectory["obs"])            
+            num_episodes = count           
 
         # Try loading exiting train/val split indices
         existing_indices = kwargs.get("indices", None)
@@ -331,31 +380,73 @@ def get_MS_loaders(cfg,  **kwargs) -> None:
             split_idx = int(np.floor(num_episodes*val_split))
             train_idx = indices[:num_episodes-split_idx]
             val_idx = indices[num_episodes-split_idx:]
-            
-            # # Save index split to pickle file
-            # if os.path.exists(path):
-            #     print("Replacing existing train/val index file")
-            #     with open(path,'wb') as f:
-            #         pickle.dump((train_idx, val_idx), f)
-            # else:
-            #     print("Creating new train/val index file")
-            #     with open(path,'xb') as f:
-            #         pickle.dump((train_idx, val_idx), f)
-        
-        # elif existing_indices=="file":
-        #     assert os.path.exists(path), "out directory does not contain index file"
-        #     print(f"Loading indices from file: {path}")
-        #     with open(path,'rb') as f:
-        #             train_idx, val_idx = pickle.load(f)
-        # else:
-        #     train_idx, val_idx = existing_indices
 
         print("Training Indices: " + str(train_idx))
         print("Validation Indices: " + str(val_idx))
 
         # Create datasets
-        train_dataset = ManiSkillConvONetDataset_V2(dataset_file, train_idx)
-        val_dataset = ManiSkillConvONetDataset_V2(dataset_file, val_idx)
+        train_dataset = ManiSkillConvONetDataset_V3(dataset_file, train_idx)
+        val_dataset = ManiSkillConvONetDataset_V3(dataset_file, val_idx)
+
+        if kwargs.get("return_datasets", False):
+            return train_dataset, val_dataset
+
+        # Create loaders
+        shuffle = kwargs.get("shuffle", True)
+        print(f"Shuffling: {shuffle}")
+        train_loader =  DataLoader(train_dataset, batch_size=cfg["training"]["batch_size"], 
+                                   num_workers=cfg["training"]["n_workers"], 
+                                   pin_memory=True, drop_last=False, shuffle=shuffle)
+        val_loader =  DataLoader(val_dataset, batch_size=cfg["training"]["batch_size_val"], 
+                                 num_workers=cfg["training"]["n_workers_val"], 
+                                 pin_memory=True, drop_last=False, shuffle=shuffle)
+        
+        return train_loader, val_loader
+
+
+def get_MS_loaders(cfg,  **kwargs) -> None:
+        cfg_data = cfg["data"]
+        dataset_file: str = cfg_data["dataset"]
+        gt_file: str = cfg_data["ground_truth"]
+        val_split: float = cfg_data.get("val_split", 0.5)
+        preshuffle: bool = cfg_data.get("preshuffle", True)
+        count = cfg_data.get("max_count", None) # Dataset count limitations
+
+        assert os.path.exists(dataset_file)
+        assert os.path.exists(gt_file)
+        
+        json_path = dataset_file.replace(".h5", ".json")
+        json_data = load_json(json_path)
+        episodes = json_data["episodes"]
+        
+        # Limit number of loaded episodes if needed
+        num_episodes = len(episodes)
+        if count is not None:
+            assert count <= num_episodes
+            num_episodes = count           
+
+        # Try loading exiting train/val split indices
+        existing_indices = kwargs.get("indices", None)
+        path = os.path.join(cfg["training"]["out_dir"],'train_val_indices.pickle')
+        
+        if existing_indices is None:
+            indices = list(range(num_episodes))
+            
+            # Shuffle the index list for train/val split
+            if preshuffle:
+                np.random.shuffle(indices)
+
+            # Train/Val split
+            split_idx = int(np.floor(num_episodes*val_split))
+            train_idx = indices[:num_episodes-split_idx]
+            val_idx = indices[num_episodes-split_idx:]
+
+        print("Training Indices: " + str(train_idx))
+        print("Validation Indices: " + str(val_idx))
+
+        # Create datasets
+        train_dataset = ManiSkillConvONetDataset_V2(dataset_file,gt_file, train_idx)
+        val_dataset = ManiSkillConvONetDataset_V2(dataset_file, gt_file, val_idx)
 
         if kwargs.get("return_datasets", False):
             return train_dataset, val_dataset
@@ -475,7 +566,8 @@ import matplotlib.animation as animation
 
 if __name__ == "__main__":
     path = "tskill/data/demos/PegInsertionSide-v0/trajectory.rgbd.pd_joint_delta_pos.h5"
-    dataset = ManiSkillConvONetDataset_V2(path, indices=[0])
+    # dataset = ManiSkillConvONetDataset_V2(path, indices=[0])
+    dataset = ManiSkillDataset(path)
 
     animate = False
     pointcloud = False
@@ -582,12 +674,11 @@ if __name__ == "__main__":
         # Generate a series of images
         images = []
 
-        episode = dataset[0]['rgbd']
-        batch = episode[0]
-        for scene in batch:
-            cam = scene[0]
-            img = tensor_to_numpy(torch.permute(cam[0:3, :, :], (1, 2, 0)))
-            images.append(img)
+        episode = dataset[0]["obs"]["image"]["base_camera"]["rgb"]
+        # print(episode)
+        for scene in episode:
+            # img = tensor_to_numpy(torch.permute(torch.tensor(scene), (1, 2, 0)))
+            images.append(scene)
 
         # Initialize the image
         im = ax.imshow(images[0])
@@ -607,6 +698,7 @@ if __name__ == "__main__":
         )
 
         # Display the animation
+        ani.save("base_cam_ani.gif")
         plt.show()
 
 

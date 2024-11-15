@@ -24,24 +24,17 @@ class ConvolutionalOccupancyNetwork(nn.Module):
 
         self._device = device
 
-    def forward(self, input, sample=True, **kwargs):
+    def forward(self, p, inputs, sample=True, **kwargs):
         ''' Performs a forward pass through the network.
 
         Args:
             p (tensor): sampled points
-            inputs (tensor): conditioning input
+            inputs (tensor): conditioning input (encoded values at point p)
             sample (bool): whether to sample for z
         '''
-        # if input.shape != [1, any, 6]:
-            # print(input.shape)
-            # raise ValueError("Input tensor has wrong dimensions")
-            
 
-        obs = input
-        pcd = input[:, :, 0:3]
-
-        c = self.encode_inputs(obs)
-        p_r = self.decode(pcd, c, **kwargs)
+        c = self.encode_inputs(inputs)
+        p_r = self.decode(p, c, **kwargs)
 
         ret_dict = {
             "c": c,
@@ -60,7 +53,6 @@ class ConvolutionalOccupancyNetwork(nn.Module):
         if self.encoder is not None:
             c = self.encoder(inputs)
         else:
-            # Return inputs?
             c = torch.empty(inputs.size(0), 0)
 
         return c

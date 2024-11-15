@@ -63,7 +63,7 @@ class Trainer(BaseTrainer):
         eval_dict = {}
 
         points = data.get('points').to(device)
-        occ = data.get('points.occ').to(device)
+        occ = data.get('occ').to(device)
 
         inputs = data.get('inputs', torch.empty(points.size(0), 0)).to(device)
         voxels_occ = data.get('voxels')
@@ -120,7 +120,7 @@ class Trainer(BaseTrainer):
         '''
         device = self.device
         p = data.get('points').to(device)
-        occ = data.get('points.occ').to(device)
+        occ = data.get('occ').to(device)
         inputs = data.get('inputs', torch.empty(p.size(0), 0)).to(device)
         
         if 'pointcloud_crop' in data.keys():
