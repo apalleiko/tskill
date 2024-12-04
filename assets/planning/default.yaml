@@ -2,7 +2,7 @@ method: plan
 notes:
 data:
   mode: libero
-  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90"
+  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/KITCHEN_SCENE1_open_the_top_drawer_of_the_cabinet_and_put_the_bowl_in_it_demo.hdf5"
   val_split: .1
   preshuffle: False
   max_seq_len: 380
@@ -16,8 +16,8 @@ data:
   full_seq_val: False
 
 model:
-  goal_mode: one-hot
-  vae_path: /home/mrl/Documents/Projects/tskill/out/PegInsertion/VAE/016
+  goal_mode: image
+  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/016
   hidden_dim: 512
   dropout : 0.1
   nheads : 8
@@ -29,7 +29,7 @@ model:
   conditional_plan: True # Alt
 
 loss:
-  z_weight: .1
+  z_weight: 1
   act_weight: 0
   dist_weight: 0
 
