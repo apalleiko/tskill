@@ -34,6 +34,7 @@ class Trainer(BaseTrainer):
 
         self.z_weight = cfg["loss"]["z_weight"]
         self.act_weight = cfg["loss"]["act_weight"]
+        self.dist_weight = cfg["loss"]["dist_weight"]
 
         # Precalc featuer availability
         aug_cond = not cfg["data"]["augmentation"].get("image_aug",0) or not cfg["data"]["augment"]
@@ -149,7 +150,7 @@ class Trainer(BaseTrainer):
         num_actions = torch.sum(action_loss_mask.to(torch.int16)) * act_dim
 
         # Convert pad mask to (0,1) where 1 is attended
-        latent_loss_mask = torch.logical_not(skill_pad_mask)
+        latent_loss_mask = torch.logical_not(skill_pad_mask) # (bs, skill_seq)
         num_latent = torch.sum(latent_loss_mask.to(torch.int16)) * latent_dim
         
         # Get model outputs
@@ -163,24 +164,26 @@ class Trainer(BaseTrainer):
             self.model.conditional_plan = prev_cond_plan
             # self.model.vae.conditional_decode = prev_cond_dec
 
-        a_hat = out["a_hat"]
-        z_hat = out["z_hat"]
+        a_hat = out["a_hat"] # (bs, seq, act_dim)
+        z_hat = out["z_hat"] # (bs, skill_seq, z_dim)
+        # dist_hat = out["dist_hat"] # (bs, skill_seq, 1)
         mu_targ = out["vae_out"]["mu"].to(self.device).detach() # (bs, skill_seq, z_dim)
         logvar = out["vae_out"]["logvar"].to(self.device).detach() # (bs, skill_seq, z_dim)
         std_targ = (logvar / 2).exp()
         latent_targ = out["vae_out"]["latent"].permute(1,0,2).to(self.device).detach() # (bs, skill_seq, z_dim)
-
+        
         # Get unpadded actions
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
         loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-        metric_dict["act_plan_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        metric_dict["act_plan_loss"] = (F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions)
 
         # Get unpadded skills
         z_hat_l = z_hat[latent_loss_mask]
         mu_targ_l = mu_targ[latent_loss_mask]
         std_targ_l = std_targ[latent_loss_mask]
         lat_targ_l = latent_targ[latent_loss_mask]
+
         # MSE Loss
         # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
         # Squared Mehalanobis distance loss
@@ -188,11 +191,20 @@ class Trainer(BaseTrainer):
         # Squared latent loss
         # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, lat_targ_l, reduction="sum") / num_latent
 
+        # Distance loss
+        # dist_hat_l = dist_hat[latent_loss_mask]
+        # dist_targ_l = torch.sum(action_loss_mask,dim=1,keepdim=True).repeat(1,dist_hat.shape[1]) # (bs,skill_seq)
+        # for i in range(dist_hat.shape[1]):
+        #     dist_targ_l[:,i] = dist_targ_l[:,i] - self.model.max_skill_len * i
+        # dist_targ_l = dist_targ_l.unsqueeze(-1)[latent_loss_mask] / self.model.max_skill_len
+        # loss_dict["dist_loss"] = self.dist_weight * F.mse_loss(dist_hat_l,dist_targ_l)
+
+        # Action vector metrics
         metric_dict["aplan_vector_traj"] = a_hat.detach()
         metric_dict["ahat_vector"] = a_hat_l.detach()
         metric_dict["atarg_vector"] = a_targ_l.detach()
 
-        # Compute some metrics
+        # Compute some time dependent metrics
         for i in [1,50,100]:
             metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / (num_actions * (act_dim - 1) / act_dim)
             metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / (num_actions * 1 / act_dim)

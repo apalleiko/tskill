@@ -48,7 +48,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         val_split: float = cfg_data.get("val_split", 0.1)
         preshuffle: bool = cfg_data.get("preshuffle", True)
         augment: bool = cfg_data.get("augment", False) # Augmentation
-        pad: bool = cfg_data.get("pad", True)
+        pad: bool = cfg_data.get("pad", False) # For specific cases to pad to a specific length. Otherwise is padded in collate function.
         count: int = cfg_data.get("max_count", 0) # Dataset count limitations
         max_skill_len: int = cfg_model_vae["max_skill_len"] # Max skill length
         autoregressive_decode: bool = cfg_model_vae["autoregressive_decode"] # Whether decoding autoregressively
@@ -256,15 +256,15 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         add_batch_dim = return_dataset or override_batch_dim
         if add_batch_dim:
             print("Adding batch dimension to returned data!")
-        if batch_size == 1:
-            pad2msl_train = True
-        else:
-            pad2msl_train = False
-        if batch_size_val == 1:
-            pad2msl_val = True
-        else:
-            pad2msl_val = False
-        pad2msl_train = pad2msl_val = False #BUG
+        # if batch_size == 1:
+        #     pad2msl_train = True
+        # else:
+        #     pad2msl_train = False
+        # if batch_size_val == 1:
+        #     pad2msl_val = True
+        # else:
+        #     pad2msl_val = False
+        pad2msl_train = pad2msl_val = kwargs.get("pad2msl",False)
 
         if goal_mode is not None:
             if goal_mode != "image":
@@ -305,11 +305,11 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         train_loader =  DataLoader(train_dataset, batch_size=batch_size, 
                                    num_workers=cfg["training"]["n_workers"],
                                    pin_memory=True, drop_last=True, shuffle=shuffle,
-                                   persistent_workers=True)
+                                   persistent_workers=True, collate_fn=efficient_collate_fn)
         val_loader =  DataLoader(val_dataset, batch_size=batch_size_val, 
                                  num_workers=cfg["training"]["n_workers_val"], 
-                                 pin_memory=True, drop_last=True, shuffle=shuffle,
-                                 persistent_workers=True)
+                                 pin_memory=True, drop_last=False, shuffle=shuffle,
+                                 persistent_workers=True, collate_fn=efficient_collate_fn)
         
         return train_loader, val_loader
 

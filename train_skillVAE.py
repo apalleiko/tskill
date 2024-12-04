@@ -116,14 +116,14 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 8
+        cfg["training"]["batch_size"] = 2
         cfg["training"]["batch_size_alt"] = 8
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 21
+        cfg["training"]["validate_every"] = 5
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 1
+        cfg["training"]["max_it"] = 20
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -209,7 +209,6 @@ def main(args):
             print("Current best VAE validation metric: %.8f"
             % (vae_val_best))
 
-    # sim_loss = SimLoss(cfg, val_dataset)
     try:
         load_dict = checkpoint_io.load("model.pt")
     except FileExistsError:
@@ -353,7 +352,6 @@ def main(args):
 
             # Run validation
             if validate_every > 0 and (it % validate_every) == 0:
-                # sim_eval = sim_loss.sim_acts(model)
                 eval_dict, eval_metric_dict = trainer.evaluate(val_loader)
                 metric_val = eval_dict[model_selection_metric]
                 print(
