@@ -182,7 +182,6 @@ class Trainer(BaseTrainer):
         z_hat_l = z_hat[latent_loss_mask]
         mu_targ_l = mu_targ[latent_loss_mask]
         std_targ_l = std_targ[latent_loss_mask]
-        lat_targ_l = latent_targ[latent_loss_mask]
 
         # MSE Loss
         # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent

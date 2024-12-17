@@ -184,13 +184,20 @@ def main():
         tasks = args.task_id
     
     for task_id in tasks:
-        task = benchmark.get_task(task_id)
+        if isinstance(dataset, MultitaskDataset):
+            task = benchmark.get_task(task_id)
+            task_dataset: LiberoDataset = [d for d in dataset.sequence_datasets if task.name in d.dataset_file][0]
+            data_info = data_info_all["datasets"][task_dataset.dataset_file]
+        else:
+            task_dataset: LiberoDataset = dataset
+            demo_name = task_dataset.dataset_file.split('/')[-1].split('.')[0][:-5]
+            task = [t for t in benchmark.tasks if t.name == demo_name][0]
+            data_info = data_info_all
+
         print("RUNNING ON TASK: ",task.name)
-        task_dataset: LiberoDataset = [d for d in dataset.sequence_datasets if task.name in d.dataset_file][0]
         # Have to toggle dataset padding, because is done in collate function for training
         task_dataset.pad = True
         task_dataset.pad2msl = True
-        data_info = data_info_all["datasets"][task_dataset.dataset_file]
 
         # Load only the full episode version of the dataset
         if "train_ep_indices" not in data_info.keys():
@@ -228,16 +235,17 @@ def main():
             print("Doing model forward pass...")
             with torch.no_grad():
                 out = model(data, use_precalc=use_precalc)
+
             # from mpl_toolkits.axes_grid1 import make_axes_locatable
             # plt.close()
-            # true_mu = out["vae_out"]["mu"]
-            # true_std = (out["vae_out"]["logvar"] / 2).exp()
-            # pred_mu = out["z_hat"]
-            # mse = torch.square(true_mu[0,:,:]-pred_mu[0,:,:]).numpy()
-            # mehal = torch.divide(torch.square(true_mu[0,:,:]-pred_mu[0,:,:]),true_std[0,...]).numpy()
-            # # true_mu = out["mu"]
-            # # true_std = (out["logvar"] / 2).exp()
-            # # pred_mu = true_mu
+            # # true_mu = out["vae_out"]["mu"]
+            # # true_std = (out["vae_out"]["logvar"] / 2).exp()
+            # # pred_mu = out["z_hat"]
+            # # mse = torch.square(true_mu[0,:,:]-pred_mu[0,:,:]).numpy()
+            # # mehal = torch.divide(torch.square(true_mu[0,:,:]-pred_mu[0,:,:]),true_std[0,...]).numpy()
+            # true_mu = out["mu"]
+            # true_std = (out["logvar"] / 2).exp()
+            # pred_mu = true_mu
             # print(true_mu.shape)
             # fig, axs = plt.subplots(1, 5, sharey=True)
             # plt.axis("off")
@@ -259,17 +267,17 @@ def main():
             # fig.add_axes(cax)
             # fig.colorbar(pcm2, cax = cax, orientation = 'horizontal')
 
-            # pcm3 = axs[3].pcolormesh(mse)
-            # divider = make_axes_locatable(axs[3])
-            # cax = divider.new_vertical(size = '5%', pad = 0.1, pack_start=True)
-            # fig.add_axes(cax)
-            # fig.colorbar(pcm3, cax = cax, orientation = 'horizontal')
+            # # pcm3 = axs[3].pcolormesh(mse)
+            # # divider = make_axes_locatable(axs[3])
+            # # cax = divider.new_vertical(size = '5%', pad = 0.1, pack_start=True)
+            # # fig.add_axes(cax)
+            # # fig.colorbar(pcm3, cax = cax, orientation = 'horizontal')
 
-            # pcm4 = axs[4].pcolormesh(mehal)
-            # divider = make_axes_locatable(axs[4])
-            # cax = divider.new_vertical(size = '5%', pad = 0.1, pack_start=True)
-            # fig.add_axes(cax)
-            # fig.colorbar(pcm4, cax = cax, orientation = 'horizontal')
+            # # pcm4 = axs[4].pcolormesh(mehal)
+            # # divider = make_axes_locatable(axs[4])
+            # # cax = divider.new_vertical(size = '5%', pad = 0.1, pack_start=True)
+            # # fig.add_axes(cax)
+            # # fig.colorbar(pcm4, cax = cax, orientation = 'horizontal')
 
             # axs[0].set_ylabel("Skill Number")
             # axs[1].set_yticks([])
@@ -289,7 +297,6 @@ def main():
             # # plt.tight_layout()
             # plt.show()
             # continue
-            # sys.exit()
 
             env_num = 1
             # env = SubprocVectorEnv(

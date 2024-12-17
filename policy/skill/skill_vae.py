@@ -174,6 +174,12 @@ class TSkillCVAE(nn.Module):
                                             seq_pad_mask, skill_pad_mask, 
                                             enc_src_mask, enc_mem_mask, enc_tgt_mask) # (skill_seq, bs, latent_dim)
         
+        # Check for NaNs
+        if torch.any(torch.isnan(z)):
+            with open("ERROR_DATA.pickle",'+wb') as f:
+                pickle.dump(data, f)
+            raise ValueError(f"NaNs encountered during encoding! Data saved to ERROR_DATA.pickle")
+        
         ### Decode skill sequence
         a_hat = self.sequence_decode(z, qpos, actions, (img_src, img_pe),
                                      seq_pad_mask, skill_pad_mask,
@@ -262,18 +268,26 @@ class TSkillCVAE(nn.Module):
         enc_tgt = enc_tgt + enc_tgt_pe
         enc_tgt = self.enc_tgt_norm(enc_tgt)
 
-        # query encoder model
-        enc_output = self.encoder(src=enc_src,
-                                  src_key_padding_mask=src_pad_mask, 
-                                  src_is_causal=self.encoder_is_causal,
-                                  src_mask=src_mask,
-                                  memory_key_padding_mask=src_pad_mask,
-                                  memory_mask=mem_mask,
-                                  memory_is_causal=self.encoder_is_causal, 
-                                  tgt=enc_tgt,
-                                  tgt_key_padding_mask=tgt_pad_mask,
-                                  tgt_is_causal=self.encoder_is_causal,
-                                  tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+        if self.encoder_is_causal:
+            src_pad_mask = tgt_pad_mask = None # Padded outputs are ignored in loss downstream
+
+        # # query encoder model
+        # enc_output = self.encoder(src=enc_src,
+        #                           src_key_padding_mask=src_pad_mask, 
+        #                           src_is_causal=self.encoder_is_causal,
+        #                           src_mask=src_mask,
+        #                           memory_key_padding_mask=src_pad_mask,
+        #                           memory_mask=mem_mask,
+        #                           memory_is_causal=self.encoder_is_causal, 
+        #                           tgt=enc_tgt,
+        #                           tgt_key_padding_mask=tgt_pad_mask,
+        #                           tgt_is_causal=self.encoder_is_causal,
+        #                           tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+        
+        enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    memory_key_padding_mask=src_pad_mask,
+                                    tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
 
         latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
         mu = latent_info[:, :, :self.z_dim] # (skill_seq, bs, latent_dim)
@@ -312,15 +326,19 @@ class TSkillCVAE(nn.Module):
             mem_mask = mem_mask.to(self._device)
         if tgt_mask is not None:
             tgt_mask = tgt_mask.to(self._device)
-        src_pad_mask = src_pad_mask.to(self._device)
-        tgt_pad_mask = tgt_pad_mask.to(self._device)
+
+        if not self.autoregressive_decode:
+            src_pad_mask = src_pad_mask.to(self._device)
+            tgt_pad_mask = tgt_pad_mask.to(self._device)
+            # Get a batch mask for handling fully padded inputs during training
+            batch_mask = torch.all(src_pad_mask, dim=1)
+            if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which could happen during training.
+                return torch.zeros(self.max_skill_len, bs, self.action_dim, device=self._device)
+        else:
+            src_pad_mask = None # padded items ignored downstream
+            tgt_pad_mask = None # padded items ignored downstream
 
         bs = z.shape[1]
-
-        # Get a batch mask for handling fully padded inputs during training
-        batch_mask = torch.all(src_pad_mask, dim=1)
-        if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which happens during training.
-            return torch.zeros(self.max_skill_len, bs, self.action_dim, device=self._device)
 
         # obtain learned postition embedding for z, state, & img inputs
         dec_type_embed = self.input_embed.weight * self.input_embed_scale_factor
@@ -335,11 +353,9 @@ class TSkillCVAE(nn.Module):
         # tgt
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            # TODO ONLY PASSING IN ZEROS FOR TGT
             # dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
             dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)
-            tgt_pad_mask[:, :] = False # Padded action outputs not attended by earlier actions and ignored downstream.
         else:
             dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL, bs, hidden_dim)
             dec_tgt  = torch.zeros_like(dec_tgt_pe) # (MSL, bs, hidden_dim)
@@ -383,25 +399,27 @@ class TSkillCVAE(nn.Module):
         dec_src = dec_src + dec_src_pe
         dec_src = self.dec_src_norm(dec_src)
 
-        dec_output = self.decoder(src=dec_src,
-                                  src_key_padding_mask=None, 
-                                  src_is_causal=self.autoregressive_decode, # pseudo-causal
-                                  src_mask=src_mask,
-                                  memory_key_padding_mask=None,
-                                  memory_mask=mem_mask,
-                                  memory_is_causal=self.autoregressive_decode, 
-                                  tgt=dec_tgt,
-                                  tgt_key_padding_mask=tgt_pad_mask,
-                                  tgt_is_causal=self.autoregressive_decode,
-                                  tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
+        # dec_output = self.decoder(src=dec_src,
+        #                           src_key_padding_mask=None, 
+        #                           src_is_causal=self.autoregressive_decode, # pseudo-causal
+        #                           src_mask=src_mask,
+        #                           memory_key_padding_mask=None,
+        #                           memory_mask=mem_mask,
+        #                           memory_is_causal=self.autoregressive_decode, 
+        #                           tgt=dec_tgt,
+        #                           tgt_key_padding_mask=tgt_pad_mask,
+        #                           tgt_is_causal=self.autoregressive_decode,
+        #                           tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
+        
+        dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    memory_key_padding_mask=None,
+                                    tgt_is_causal=self.autoregressive_decode, memory_is_causal=self.autoregressive_decode)
 
         # Send project output to action dimensions
         a_joint = self.dec_action_joint_proj(dec_output) # (MSL, bs, action_dim - 1)
         a_grip = self.dec_action_gripper_proj(dec_output) # (MSL, bs, 1)
         a_hat = torch.cat((a_joint, a_grip), -1) # (MSL, bs, action_dim)
-        
-        # return zeros for fully padded inputs (MSL, bs, action_dim)
-        a_hat[:, batch_mask, :] = 0 # Only keeping because useful for decoding.
 
         return a_hat
     

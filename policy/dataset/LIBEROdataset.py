@@ -135,8 +135,8 @@ class LiberoDataset(Dataset):
         if "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
-            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
-            # img_pe2 =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden) #BUG
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            # img_pe2 =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
         else:
             use_precalc = False
             rgb = rescale_rgbd(obs["rgb"], separate_cams=True)
@@ -155,7 +155,7 @@ class LiberoDataset(Dataset):
 
         # Add padding to sequences to match lengths and generate padding masks
         if use_precalc:
-            inputs = dict(state=state,actions=actions,img_feat=img_feat,img_pe=img_pe,) # img_pe_plan=img_pe2) #BUG
+            inputs = dict(state=state,actions=actions,img_feat=img_feat,img_pe=img_pe,) # img_pe_plan=img_pe2)
         else:
             inputs = dict(state=state,actions=actions,rgb=rgb)
             

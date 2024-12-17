@@ -286,17 +286,22 @@ class TSkillPlan(nn.Module):
         tgt = self.tgt_norm(tgt)
 
         # query encoder model
-        z_output = self.transformer(src=src, 
-                                    src_key_padding_mask=None, 
-                                    src_is_causal=False,
-                                    src_mask = src_mask,
-                                    memory_key_padding_mask=None,
-                                    memory_mask=mem_mask,
-                                    memory_is_causal=False, 
-                                    tgt=tgt,
+        # z_output = self.transformer(src=src, 
+        #                             src_key_padding_mask=None, 
+        #                             src_is_causal=False,
+        #                             src_mask = src_mask,
+        #                             memory_key_padding_mask=None,
+        #                             memory_mask=mem_mask,
+        #                             memory_is_causal=False, 
+        #                             tgt=tgt,
+        #                             tgt_key_padding_mask=tgt_pad_mask,
+        #                             tgt_is_causal=True,
+        #                             tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+        
+        z_output = self.transformer(tgt, src, tgt_mask=tgt_mask, memory_mask=mem_mask,
                                     tgt_key_padding_mask=tgt_pad_mask,
-                                    tgt_is_causal=True,
-                                    tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+                                    memory_key_padding_mask=None,
+                                    tgt_is_causal=True, memory_is_causal=False)
 
         z = self.z_proj(z_output) # (skill_seq, bs, 2*latent_dim)
 
