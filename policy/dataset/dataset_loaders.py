@@ -256,21 +256,15 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         add_batch_dim = return_dataset or override_batch_dim
         if add_batch_dim:
             print("Adding batch dimension to returned data!")
-        # if batch_size == 1:
-        #     pad2msl_train = True
-        # else:
-        #     pad2msl_train = False
-        # if batch_size_val == 1:
-        #     pad2msl_val = True
-        # else:
-        #     pad2msl_val = False
         pad2msl_train = pad2msl_val = kwargs.get("pad2msl",False)
 
-        if goal_mode is not None:
-            if goal_mode != "image":
+        if goal_mode is None:
+            print("No task vec passed for current goal mode")
+        elif goal_mode != "image":
+            if not multitask:
+                goal_mode = torch.zeros(90)
+            else:
                 goal_mode = data_info.get("task_vec",None)
-                if goal_mode is None:
-                    print("No task vec passed for current goal mode")
 
         ### Create datasets
         if mode == "maniskill":

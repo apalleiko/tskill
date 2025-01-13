@@ -5,8 +5,6 @@ import torch
 from torch import nn
 from policy.skill.config import get_model as get_vae
 from policy import config
-from policy.checkpoints import CheckpointIO
-
 
 def freeze_network(network):
     for param in network.parameters():
@@ -52,11 +50,9 @@ def get_model(cfg, device=None):
         cfg["vae_cfg"] = vae_cfg
     else:
         vae_cfg = cfg["vae_cfg"]
-    vae = get_vae(vae_cfg, device=device)
-    checkpoint_io = CheckpointIO(cfg_model["vae_path"], model=vae)
-    load_dict = checkpoint_io.load("model_best.pt")
-    vae.conditional_decode = cfg_model["conditional_decode"]
 
+    vae = get_vae(vae_cfg, device=device)
+    vae.conditional_decode = cfg_model["conditional_decode"]
     stt_encoder = vae.stt_encoder
 
     if not train_stt_encoder:

@@ -51,7 +51,7 @@ class Trainer(BaseTrainer):
         else:
             self.kl_slope = 0
         # Continuity weighting
-        self.cont_weight = cfg["loss"]["cont_weight"]
+        self.cont_weight = cfg["loss"].get("cont_weight",0)
 
     def epoch_step(self):
         if self.scheduler is not None and self.epoch_it > 0:
@@ -149,14 +149,14 @@ class Trainer(BaseTrainer):
         loss_dict["act_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
 
         # Continuity Loss: Penalizes temporal difference in latent skill predictions
-        mu_cont_targ = torch.cat((mu_targ,mu_targ[:,-1:,:]),dim=1) # (bs, seq+1, z_dim)
-        std_cont_targ = torch.cat((std_targ,std_targ[:,-1:,:]),dim=1) # (bs, seq+1, z_dim)
-        kl_mask_cont = torch.cat((kl_loss_mask,kl_loss_mask[:,-1:]),dim=1) # (bs, seq+1)
-        dist = torch.distributions.Normal(mu_cont_targ[kl_mask_cont],std_cont_targ[kl_mask_cont])
-        mu_cont = torch.cat((mu_targ[:,:1,:],mu_targ),dim=1) # (bs, seq+1, z_dim)
-        std_cont = torch.cat((std_targ[:,:1,:],std_targ),dim=1) # (bs, seq+1, z_dim)
-        dist_cont = torch.distributions.Normal(mu_cont[kl_mask_cont], std_cont[kl_mask_cont])
-        loss_dict["cont_loss"] = self.cont_weight * normal_kl(dist, dist_cont).sum() / num_dist
+        # mu_cont_targ = torch.cat((mu_targ,mu_targ[:,-1:,:]),dim=1) # (bs, seq+1, z_dim)
+        # std_cont_targ = torch.cat((std_targ,std_targ[:,-1:,:]),dim=1) # (bs, seq+1, z_dim)
+        # kl_mask_cont = torch.cat((kl_loss_mask,kl_loss_mask[:,-1:]),dim=1) # (bs, seq+1)
+        # dist = torch.distributions.Normal(mu_cont_targ[kl_mask_cont],std_cont_targ[kl_mask_cont])
+        # mu_cont = torch.cat((mu_targ[:,:1,:],mu_targ),dim=1) # (bs, seq+1, z_dim)
+        # std_cont = torch.cat((std_targ[:,:1,:],std_targ),dim=1) # (bs, seq+1, z_dim)
+        # dist_cont = torch.distributions.Normal(mu_cont[kl_mask_cont], std_cont[kl_mask_cont])
+        # loss_dict["cont_loss"] = self.cont_weight * normal_kl(dist, dist_cont).sum() / num_dist
 
         # Compute some metrics
         for i in [1,10,50,100]:

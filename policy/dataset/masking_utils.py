@@ -55,8 +55,8 @@ def get_plan_ar_masks(num_img_feats, max_num_skills, goal_mode, device='cpu'):
     else:
         goal_tokens = 1
     plan_src_len = max_num_skills * (1 + num_img_feats) + goal_tokens # (MNS*(q + img_feats) + goal)
-    # tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
-    tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
+    tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
+    # tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
     mem_mask = torch.ones(max_num_skills, plan_src_len, device=device).to(torch.bool) # Start with everything masked
     src_mask = torch.ones(plan_src_len, plan_src_len, device=device).to(torch.bool) # Start with everything masked
     src_mask[-goal_tokens:,-goal_tokens:] = False # Unmask goal self attention block
@@ -86,7 +86,8 @@ def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, device='cpu
     Gets a causal mask for the encoder. Is only the size of max seq len, so has to be repeated in the encoder itself.
     """
     enc_src_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_seq_len, device=device)
-    enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
+    # enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
+    enc_tgt_mask = ~(torch.eye(max_num_skills, device=device).to(torch.bool)) # Only allow self attention for single step prediction
     enc_mem_mask = torch.ones(max_num_skills, max_seq_len, device=device).to(torch.bool)
     for s in range(max_num_skills):
         sk_start = s*max_skill_len

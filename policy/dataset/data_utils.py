@@ -110,7 +110,6 @@ class DataAugmentation:
         cfg_aug = cfg["data"]["augmentation"]
         self.subsequence_rate = cfg_aug.get("subsequence_rate", 0)
         self.seq_masking_rate = cfg_aug.get("seq_masking_rate", 0)
-        self.type_masking_rate = cfg_aug.get("type_masking_rate", 0)
         self.img_aug = cfg_aug.get("image_aug", 0)
         self.input_noise = cfg_aug.get("input_noise", 0)
 
@@ -122,8 +121,8 @@ class DataAugmentation:
         if self.seq_masking_rate > 0:
             data = self.seq_masking(data)
 
-        if self.type_masking_rate > 0:
-            data = self.type_masking(data)
+        if self.img_aug > 0:
+            data = self.image_aug(data)
 
         if self.input_noise > 0:
             data = self.additive_input_noise(data)
@@ -158,9 +157,13 @@ class DataAugmentation:
             num_seq = torch.randint(1, num_unpad_seq-1, (1,1)).squeeze()
             
             # Start at random point in the sequence
+            from_start = torch.round(torch.rand(1)).item()
             for k,v in data.items():
                 if "mask" not in k and "goal" not in k:
-                    data[k] = v[num_seq:,...]
+                    if not from_start:
+                        data[k] = v[num_seq:,...]
+                    else:
+                        data[k] = v[:num_seq,...]
 
             # # Reset "new" sequences to the beginning (for positional encodings)
             # for k,v in data.items():

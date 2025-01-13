@@ -120,10 +120,10 @@ def main(args):
         cfg["training"]["batch_size_alt"] = 8
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
-        cfg["training"]["backup_every"] = 1000
-        cfg["training"]["validate_every"] = 5
-        cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 2
+        cfg["training"]["backup_every"] = 11
+        cfg["training"]["validate_every"] = 11
+        cfg["training"]["checkpoint_every"] = 11
+        cfg["training"]["max_it"] = 10
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -193,21 +193,21 @@ def main(args):
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
         # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
         if we := cfg["training"].get("lr_warmup_epochs",0) > 0:
-            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.01, total_iters=we)
+            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=we)
             scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler_wu, scheduler],[we])
     else:
         scheduler = None
     
     trainer: Trainer = config.get_trainer(model, optimizer, cfg, device=device, scheduler=scheduler)
-    # checkpoint_io = CheckpointIO(out_dir, model=model, optimizer=optimizer)
     checkpoint_io = CheckpointIO(out_dir, model=model)
+
+    # Load VAE for new planning models    
     if cfg["method"] == "plan":
         checkpoint_io2 = CheckpointIO(cfg["model"]["vae_path"], model=model.vae)
-        if cfg["method"] == "plan":
-            load_dict_vae = checkpoint_io2.load("model_best.pt")
-            vae_val_best = load_dict_vae.get("loss_val_best", -model_selection_sign * np.inf)
-            print("Current best VAE validation metric: %.8f"
-            % (vae_val_best))
+        load_dict_vae = checkpoint_io2.load("model_best.pt")
+        vae_val_best = load_dict_vae.get("loss_val_best", -model_selection_sign * np.inf)
+        print("Current best VAE validation metric: %.8f"
+        % (vae_val_best))
 
     try:
         load_dict = checkpoint_io.load("model.pt")
@@ -341,11 +341,11 @@ def main(args):
                             if torch.nonzero(a_i).shape[0] > 0:
                                 writer.add_histogram(f'it_{it}_{k}', v_i, i)
                                 writer.add_histogram(f'it_{it}_atrue_vector_traj', a_i, i)
-                                if "ahat" in k:
+                                a_it = train_dataset.action_scaling(a_i.unsqueeze(0),"inverse")
+                                writer.add_histogram(f'it_{it}_atrue_vector_traj_unscaled', a_it, i)
+                                if "ahat" in k or "aplan" in k:
                                     v_it = train_dataset.action_scaling(v_i.unsqueeze(0),"inverse")
-                                    a_it = train_dataset.action_scaling(a_i.unsqueeze(0),"inverse")
                                     writer.add_histogram(f'it_{it}_{k}_unscaled', v_it, i)
-                                    writer.add_histogram(f'it_{it}_atrue_vector_traj_unscaled', a_it, i)
                     elif "vector" in k:
                         writer.add_histogram(f'{k}', v, it)
                 writer.close()

@@ -47,7 +47,7 @@ def convert_realtime_observation(observation):
     # image data is not scaled here and is kept as uint16 to save space
     cams = []
     # combine the RGB and depth images
-    cams.append(observation["agentview_image"][:,::-1,:])
+    cams.append(observation["agentview_image"][::-1,:,:])
     cams.append(observation["robot0_eye_in_hand_image"])
 
     rgb = np.concatenate(cams, axis=-1)
@@ -132,10 +132,10 @@ class LiberoDataset(Dataset):
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         state = self.state_scaling(torch.from_numpy(obs["state"])[i0:,:].float()) # (seq, state_dim)
 
-        if "resnet18" in trajectory["obs"].keys():
+        if False and "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
-            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
             # img_pe2 =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
         else:
             use_precalc = False
@@ -194,5 +194,7 @@ class LiberoDataset(Dataset):
         data = dict()
         data["rgb"] = rgb
         data["state"] = state
+        if self.goal_mode != "image" and self.goal_mode is not None:
+            data["goal"] = self.goal_mode.unsqueeze(0)
 
         return data
