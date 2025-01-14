@@ -12,7 +12,7 @@ data:
   augment: True
   augmentation:
     subsequence_rate: 0.8
-    image_aug: 0
+    image_aug: 0.25
     input_noise: 0
   max_count: 50
   indices:
@@ -23,11 +23,11 @@ model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
   z_dim : 8
-  hidden_dim: 64
+  hidden_dim: 512
   max_skill_len: 10
   conditional_decode: False
   autoregressive_decode: True
-  encode_state: False
+  encode_state: True
   encoder_is_causal: True
   
   encoder:
@@ -53,27 +53,27 @@ model:
 
 loss:
   kl_weight: .001
-  kl_weight_final: 0.01
+  # kl_weight_final: 0.01
   # cont_weight: 0.000
 
 training:
-  out_dir: out/VAE/014
+  out_dir: out/VAE/023
   max_it: 50000
   batch_size: 8
   batch_size_val: 8
   print_every: 50
   visualize_every: 2000
-  checkpoint_every: 2000
+  checkpoint_every: 1000
   validate_every: 250
-  backup_every: 1000
+  backup_every: 2000
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.000
+  lr_state_encoder: 0.00001
   lr: 0.00002
-  lr_decay: 0.9999
-  lr_warmup_epochs: 0
+  lr_decay: 0.999
+  lr_warmup_epochs: 10
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: False

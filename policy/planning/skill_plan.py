@@ -158,7 +158,7 @@ class TSkillPlan(nn.Module):
         ### Autoregressively plan skills
         if is_training:
             # Whether to seperate planning of skills and actions from reconstruction in computation graph
-            sep_vae_grad = kwargs.get("sep_vae_grad",False)
+            sep_vae_grad = kwargs.get("sep_vae_grad",True)
 
             # Get target skills from vae
             vae_out = self.vae(data, use_precalc=True)
@@ -344,6 +344,10 @@ class TSkillPlan(nn.Module):
 
             z_hat = out["z_hat"]
             self.execution_data["z_hat"] =  z_hat # (bs, sk, latent)
+
+            # print("Model z_tgt: ", self.execution_data["z_tgt"])
+            # print("Model z_hat: ", self.execution_data["z_hat"])
+
             self.execution_data["z_tgt"] = torch.cat((self.execution_data["z_tgt"], z_hat[:,-1:,:]), dim=1)
 
         # Get current skill

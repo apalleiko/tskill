@@ -396,8 +396,8 @@ class TSkillCVAE(nn.Module):
             dec_src = z_src # (z, bs, hidden)
             dec_src_pe = z_pe
             # only get skill sections of src and mem masks with no conditional decoding
-            src_mask = src_mask[-1:, -1:]
-            mem_mask = mem_mask[:,-1:]
+            # src_mask = src_mask[-1:, -1:]
+            # mem_mask = mem_mask[:,-1:]
 
         dec_src = self.dec_src_norm(dec_src)
         dec_src = dec_src + dec_src_pe
@@ -429,7 +429,7 @@ class TSkillCVAE(nn.Module):
     
     def sequence_decode(self, z, qpos, actions, img_info,
                         seq_pad_mask, skill_pad_mask,
-                        dec_mask, mem_mask, tgt_mask):
+                        src_mask, mem_mask, tgt_mask):
         """
         Decode a sequence of skills into actions given a demo trajectory. Only used
         during training.
@@ -440,7 +440,7 @@ class TSkillCVAE(nn.Module):
             img_info: (img_src, img_pe): (seq, bs, num_cam, h*w, c & hidden)
             seq_pad_mask: (bs, seq)
             skill_pad_mask: (bs, skill_seq)
-            dec_mask: (bs, MSL*(2+num_features*num_cam), ")
+            src_mask: (bs, MSL*(2+num_features*num_cam), ")
             mem_mask: (bs, MSL, MSL*(2+num_features*num_cam))
             tgt_mask: (bs, MSL, MSL)
         returns:
@@ -477,7 +477,7 @@ class TSkillCVAE(nn.Module):
             # Decode current skill with conditional info
             a_pred = self.skill_decode(sk_z, qpos_t, img_info_t,
                                         sk_skill_pad_mask, sk_seq_pad_mask, 
-                                        dec_mask, mem_mask, tgt_mask,
+                                        src_mask, mem_mask, tgt_mask,
                                         tgt) # (seq, bs, act_dim)
             
             a_hat = torch.vstack((a_hat, a_pred))
@@ -521,8 +521,12 @@ class TSkillCVAE(nn.Module):
                                             dec_src_mask, dec_mem_mask, dec_tgt_mask,
                                             tgt=dec_tgt) # (MSL|<, bs, action_dim)
             
+            # print("Model a_tgt: ", self.execution_data["dec_tgt"])
+            # print("Model a_hat: ", a_pred)
+
             self.execution_data["dec_tgt"] = torch.cat((dec_tgt, a_pred[-1:,...].permute(1,0,2)), dim=1) # (1, seq + 1, act_dim)
             a_t = a_pred.detach()[-1,...] # Take most recent action
+
         else:
             if t_act == 0:
                 seq_pad_mask = torch.zeros(1,self.max_skill_len)

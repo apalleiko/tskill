@@ -254,16 +254,29 @@ def main():
                 obs = env.set_init_state(init_states_)
 
                 for _ in range(5):  # simulate the physics without any actions
-                    env.step(np.zeros(7))
+                    obs, reward, done, info = env.step(np.zeros(7))
+                cd = task_dataset.from_obs(obs)
 
                 # task_emb = benchmark.get_task_emb(args.task_id)
 
                 pbar.set_description(f"Replaying {ind}")
                 img_obs = []
 
+                # print("RUNNING TEST FORWARD PASS")
+                # data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
+                # data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
+                # data["state"][0,0,:] = cd["state"]
+                # out = model(data, use_precalc=False)
+                # planned_actions = dataset.action_scaling(out["a_hat"][0,...],"inverse").numpy()
+
                 if args.true or not args.full_seq:
                     print("Doing model forward pass...")
-                    out = model(data, use_precalc=use_precalc)
+                    if not args.vae and method == "plan":
+                        data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
+                        data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
+                        data["state"][0,0,:] = cd["state"]
+                        
+                    out = model(data, use_precalc=False)
 
                     if args.vae and method == "plan":
                         pbar.set_postfix(
@@ -301,59 +314,56 @@ def main():
 
                     for t, a in enumerate(actions):
                         
-                        fig.canvas.flush_events()
-                        ax1.clear()
-                        ax2.clear()
-                        ax3.clear()
-                        ax4.clear()
-                        ax5.clear()
-                        ax6.clear()
-                        ax7.clear()
-                        ax8.clear()
-                        cd = task_dataset.from_obs(obs)
-                        ax1.imshow(data["rgb"][0,t,0,...].permute(1,2,0))
-                        ax1.set_ylabel("True RGB")
-                        ax2.imshow(data["rgb"][0,t,1,...].permute(1,2,0))
-                        ax3.imshow(cd["rgb"][0,0,0,...].permute(1,2,0))
-                        ax3.set_ylabel("VAE RGB")
-                        ax4.imshow(cd["rgb"][0,0,1,...].permute(1,2,0))
-                        ax5.imshow(data["rgb"][0,t,0,...].permute(1,2,0), alpha=0.5)
-                        ax6.imshow(data["rgb"][0,t,1,...].permute(1,2,0), alpha=0.5)
-                        ax5.imshow(cd["rgb"][0,0,0,...].permute(1,2,0), alpha=0.5)
-                        ax6.imshow(cd["rgb"][0,0,1,...].permute(1,2,0), alpha=0.5)
-                        ax5.set_ylabel("Overlay RGB")
-                        states = torch.cat((states, cd["state"]), dim=1)
-                        acts = torch.cat((acts, torch.from_numpy(a).unsqueeze(0)), dim=0)
-                        tacts = torch.cat((tacts, torch.from_numpy(true_actions[t]).unsqueeze(0)), dim=0)
-                        for q in range(model.state_dim):
-                            ax7.plot(data["state"][0,:t,q], "r--")
-                            ax7.plot(states[0,:t,q], "b:")
-                        for q in range(model.state_dim):
-                            ax8.plot(data["state"][0,:t,q] - states[0,:t,q])
-                        ax7.set_ylabel("True & VAE states")
-                        ax8.set_ylabel("State Errors")
-                        for d in [0,1,2]:
-                            ax9.plot(tacts[:t,d], "r--")
-                            ax9.plot(acts[:t,d], "b:")
-                        for d in [0,1,2]:
-                            ax10.plot(tacts[:t,d] - acts[:t,d])
-                        ax9.set_ylabel("True & VAE Locs")
-                        ax10.set_ylabel("Action Loc Errors")
-                        # ax10.set_ylim(-.2,.2)
-                        for d in [3,4,5]:
-                            ax11.plot(tacts[:t,d], "r--")
-                            ax11.plot(acts[:t,d], "b:")
-                        for d in [3,4,5]:
-                            ax12.plot(tacts[:t,d] - acts[:t,d])
-                        ax11.set_ylabel("True & VAE Rots")
-                        ax12.set_ylabel("Action Rot Errors")
+                        # fig.canvas.flush_events()
+                        # ax1.clear()
+                        # ax2.clear()
+                        # ax3.clear()
+                        # ax4.clear()
+                        # ax5.clear()
+                        # ax6.clear()
+                        # ax7.clear()
+                        # ax8.clear()
+                        # cd = task_dataset.from_obs(obs)
+                        # ax1.imshow(data["rgb"][0,t,0,...].permute(1,2,0))
+                        # ax1.set_ylabel("True RGB")
+                        # ax2.imshow(data["rgb"][0,t,1,...].permute(1,2,0))
+                        # ax3.imshow(cd["rgb"][0,0,0,...].permute(1,2,0))
+                        # ax3.set_ylabel("VAE RGB")
+                        # ax4.imshow(cd["rgb"][0,0,1,...].permute(1,2,0))
+                        # ax5.imshow(data["rgb"][0,t,0,...].permute(1,2,0), alpha=0.5)
+                        # ax6.imshow(data["rgb"][0,t,1,...].permute(1,2,0), alpha=0.5)
+                        # ax5.imshow(cd["rgb"][0,0,0,...].permute(1,2,0), alpha=0.5)
+                        # ax6.imshow(cd["rgb"][0,0,1,...].permute(1,2,0), alpha=0.5)
+                        # ax5.set_ylabel("Overlay RGB")
+                        # states = torch.cat((states, cd["state"]), dim=1)
+                        # acts = torch.cat((acts, torch.from_numpy(a).unsqueeze(0)), dim=0)
+                        # tacts = torch.cat((tacts, torch.from_numpy(true_actions[t]).unsqueeze(0)), dim=0)
+                        # for q in range(model.state_dim):
+                        #     ax7.plot(data["state"][0,:t,q], "r--")
+                        #     ax7.plot(states[0,:t,q], "b:")
+                        # for q in range(model.state_dim):
+                        #     ax8.plot(data["state"][0,:t,q] - states[0,:t,q])
+                        # ax7.set_ylabel("True & VAE states")
+                        # ax8.set_ylabel("State Errors")
+                        # for d in [0,1,2]:
+                        #     ax9.plot(tacts[:t,d], "r--")
+                        #     ax9.plot(acts[:t,d], "b:")
+                        # for d in [0,1,2]:
+                        #     ax10.plot(tacts[:t,d] - acts[:t,d])
+                        # ax9.set_ylabel("True & VAE Locs")
+                        # ax10.set_ylabel("Action Loc Errors")
+                        # # ax10.set_ylim(-.2,.2)
+                        # for d in [3,4,5]:
+                        #     ax11.plot(tacts[:t,d], "r--")
+                        #     ax11.plot(acts[:t,d], "b:")
+                        # for d in [3,4,5]:
+                        #     ax12.plot(tacts[:t,d] - acts[:t,d])
+                        # ax11.set_ylabel("True & VAE Rots")
+                        # ax12.set_ylabel("Action Rot Errors")
                         # ax12.set_ylim()
-
-                        ### FIGURE OUT WHAT IS GOING ON WITH THE FULL SEQUENCE EXECUTION. WITHOUT CONDITIONAL PLANNING IT SHOULD LOOK THE GODDAMN SAME.
-                        ### WHAT CAN BE DONE ABOUT THE SPIKES AT THE BEGINNING OF SKILLS? ARTIFACT OF LEARNED START TOKEN?
                         
-                        fig.canvas.draw()
-                        plt.pause(0.05)
+                        # fig.canvas.draw()
+                        # plt.pause(.1)
 
                         pbar.update()
                         obs, reward, done, info = env.step(a)
@@ -362,6 +372,7 @@ def main():
                         
                         if done:
                             print("Success!")
+                            num_success += 1
                             break
 
                 else:
@@ -399,60 +410,75 @@ def main():
                         # img = obs["agentview_image"][::-1,...]
                         img_obs.append(img)
 
-                        t=steps
-                        fig.canvas.flush_events()
-                        ax1.clear()
-                        ax2.clear()
-                        ax3.clear()
-                        ax4.clear()
-                        ax5.clear()
-                        ax6.clear()
-                        ax7.clear()
-                        ax8.clear()
-                        cd = task_dataset.from_obs(obs)
-                        ax1.imshow(data["rgb"][0,t,0,...].permute(1,2,0))
-                        ax1.set_ylabel("True RGB")
-                        ax2.imshow(data["rgb"][0,t,1,...].permute(1,2,0))
-                        ax3.imshow(current_data["rgb"][0,0,0,...].permute(1,2,0))
-                        ax3.set_ylabel("VAE RGB")
-                        ax4.imshow(current_data["rgb"][0,0,1,...].permute(1,2,0))
-                        ax5.imshow(data["rgb"][0,steps,0,...].permute(1,2,0), alpha=0.5)
-                        ax6.imshow(data["rgb"][0,t,1,...].permute(1,2,0), alpha=0.5)
-                        ax5.imshow(current_data["rgb"][0,0,0,...].permute(1,2,0), alpha=0.5)
-                        ax6.imshow(current_data["rgb"][0,0,1,...].permute(1,2,0), alpha=0.5)
-                        ax5.set_ylabel("Overlay RGB")
-                        states = torch.cat((states, cd["state"]), dim=1)
-                        acts = torch.cat((acts, torch.from_numpy(actions).unsqueeze(0)), dim=0)
-                        tacts = torch.cat((tacts, torch.from_numpy(true_actions[t]).unsqueeze(0)), dim=0)
-                        for q in range(model.state_dim):
-                            ax7.plot(data["state"][0,:t,q], "r--")
-                            ax7.plot(states[0,:t,q], "b:")
-                        for q in range(model.state_dim):
-                            ax8.plot(data["state"][0,:t,q] - states[0,:t,q])
-                        ax7.set_ylabel("True & VAE states")
-                        ax8.set_ylabel("State Errors")
-                        for d in [0,1,2]:
-                            ax9.plot(tacts[:t,d], "r--")
-                            ax9.plot(acts[:t,d], "b:")
-                        for d in [0,1,2]:
-                            ax10.plot(tacts[:t,d] - acts[:t,d])
-                        ax9.set_ylabel("True & VAE Locs")
-                        ax10.set_ylabel("Action Loc Errors")
-                        ax10.set_ylim(-.2,.2)
-                        for d in [3,4,5]:
-                            ax11.plot(tacts[:t,d], "r--")
-                            ax11.plot(acts[:t,d], "b:")
-                        for d in [3,4,5]:
-                            ax12.plot(tacts[:t,d] - acts[:t,d])
-                        ax11.set_ylabel("True & VAE Rots")
-                        ax12.set_ylabel("Action Rot Errors")
-                        # ax12.set_ylim()
+                        # t=steps
+                        # fig.canvas.flush_events()
+                        # ax1.clear()
+                        # ax2.clear()
+                        # ax3.clear()
+                        # ax4.clear()
+                        # ax5.clear()
+                        # ax6.clear()
+                        # ax7.clear()
+                        # ax8.clear()
+                        # cd = task_dataset.from_obs(obs)
+                        # ax1.imshow(data["rgb"][0,t,0,...].permute(1,2,0))
+                        # ax1.set_ylabel("True RGB")
+                        # ax2.imshow(data["rgb"][0,t,1,...].permute(1,2,0))
+                        # ax3.imshow(current_data["rgb"][0,0,0,...].permute(1,2,0))
+                        # ax3.set_ylabel("VAE RGB")
+                        # ax4.imshow(current_data["rgb"][0,0,1,...].permute(1,2,0))
+                        # ax5.imshow(data["rgb"][0,steps,0,...].permute(1,2,0), alpha=0.5)
+                        # ax6.imshow(data["rgb"][0,t,1,...].permute(1,2,0), alpha=0.5)
+                        # ax5.imshow(current_data["rgb"][0,0,0,...].permute(1,2,0), alpha=0.5)
+                        # ax6.imshow(current_data["rgb"][0,0,1,...].permute(1,2,0), alpha=0.5)
+                        # ax5.set_ylabel("Overlay RGB")
+                        # states = torch.cat((states, cd["state"]), dim=1)
+                        # acts = torch.cat((acts, torch.from_numpy(actions).unsqueeze(0)), dim=0)
+                        # tacts = torch.cat((tacts, torch.from_numpy(true_actions[t]).unsqueeze(0)), dim=0)
+                        # for q in range(model.state_dim):
+                        #     ax7.plot(data["state"][0,:t,q], "r--")
+                        #     ax7.plot(states[0,:t,q], "b:")
+                        # for q in range(model.state_dim):
+                        #     ax8.plot(data["state"][0,:t,q] - states[0,:t,q])
+                        # ax7.set_ylabel("True & VAE states")
+                        # ax8.set_ylabel("State Errors")
+                        # for d in [0,1,2]:
+                        #     ax9.plot(tacts[:t,d], "r--")
+                        #     ax9.plot(acts[:t,d], "b:")
+                        # for d in [0,1,2]:
+                        #     ax10.plot(tacts[:t,d] - acts[:t,d])
+                        # ax9.set_ylabel("True & VAE Locs")
+                        # ax10.set_ylabel("Action Loc Errors")
+                        # ax10.set_ylim(-.2,.2)
+                        # for d in [3,4,5]:
+                        #     ax11.plot(tacts[:t,d], "r--")
+                        #     ax11.plot(acts[:t,d], "b:")
+                        # for d in [3,4,5]:
+                        #     ax12.plot(tacts[:t,d] - acts[:t,d])
+                        # ax11.set_ylabel("True & VAE Rots")
+                        # ax12.set_ylabel("Action Rot Errors")
+                        # # ax12.set_ylim()
                         
-                        fig.canvas.draw()
-                        plt.pause(0.05)
+                        # fig.canvas.draw()
+                        # plt.pause(0.05)
+                        # num_skills = (steps // model.max_skill_len) + 1
+                        # t_act = steps % model.max_skill_len
+                        # print(f"==>> t_act: {t_act}")
+                        # act_seq_start = model.max_skill_len * (num_skills-1)
+                        # print(f"==>> act_seq_start: {act_seq_start}")
+                        # act_num = act_seq_start + t_act + 1
+                        # print(f"==>> act_num: {act_num}")
+                        # print("Planned action seq: ", out['a_hat'][0,act_seq_start:act_num,:])
+                        # print("True action at step: ", data["actions"][0,steps,:])
+                        # print("Planned action at step: ", planned_actions[steps,:])
+                        # print("Real action at step: ", actions)
+                        # print(f"==>> num_skills: {num_skills}")
+                        # if steps % model.max_skill_len == 0:
+                        #     print("True z_hat: ", out["z_hat"][0,:num_skills,:])
 
                         steps += 1
                         pbar.update()
+                        # input("Waiting...")
 
                         if done:
                             print("Success!")

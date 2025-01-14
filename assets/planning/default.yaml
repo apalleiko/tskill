@@ -9,7 +9,7 @@ data:
   augment: True
   augmentation:
     subsequence_rate: 0.8
-    image_aug: 0.25
+    image_aug: 0
     input_noise: 0
   max_count: 50
   full_seq: False
@@ -17,8 +17,8 @@ data:
 
 model:
   goal_mode: one-hot
-  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/006
-  hidden_dim: 64
+  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/022
+  hidden_dim: 256
   dropout : 0.1
   nheads : 8
   dim_feedforward : 1024
@@ -26,15 +26,15 @@ model:
   dec_layers : 6
   pre_norm : False
   conditional_decode: False
-  conditional_plan: False # Alt
+  conditional_plan: True # Alt
 
 loss:
-  z_weight: 1
+  z_weight: .1
   act_weight: 1
   dist_weight: 0
 
 training:
-  out_dir: out/Plan/001
+  out_dir: out/Plan/004
   train_vae: False
   max_it: 50000
   batch_size: 8
