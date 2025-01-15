@@ -132,12 +132,6 @@ class TSkillPlan(nn.Module):
         elif self.goal_mode == "one-hot":
             goal_src, goal_pe = data["goal"].to(self._device), None
 
-        ### Get autoregressive masks, if applicable
-        if self.vae.autoregressive_decode and is_training:
-            dec_src_mask, dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(self.num_img_feats*num_cam, self.max_skill_len, device=self._device)
-        else:
-            dec_tgt_mask = dec_src_mask = dec_mem_mask = None
-
         ### Get conditional planning masks if applicable
         if self.conditional_plan:
             plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
@@ -157,6 +151,7 @@ class TSkillPlan(nn.Module):
 
         ### Autoregressively plan skills
         if is_training:
+
             # Whether to seperate planning of skills and actions from reconstruction in computation graph
             sep_vae_grad = kwargs.get("sep_vae_grad",True)
 
@@ -177,12 +172,16 @@ class TSkillPlan(nn.Module):
                                       z_tgt, skill_pad_mask,
                                       plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
             
+            ### Get autoregressive masks, if applicable
+            if self.vae.autoregressive_decode:
+                dec_tgt_mask = get_dec_ar_masks(self.max_skill_len, device=self._device)
+            
             ### Decode skills
             if sep_vae_grad: # Turn off vae grad calculation for sequence decoding on pred z
                 self.vae.requires_grad_(False)
-            a_hat = self.vae.sequence_decode(z_hat, qpos, actions, (img_src, img_pe),
+            a_hat = self.vae.sequence_decode(z_hat, actions,
                                              seq_pad_mask, skill_pad_mask,
-                                             dec_src_mask, dec_mem_mask, dec_tgt_mask)
+                                             dec_tgt_mask)
             if sep_vae_grad:
                 self.vae.requires_grad_(True)
 
@@ -352,7 +351,7 @@ class TSkillPlan(nn.Module):
 
         # Get current skill
         t_sk = torch.floor(torch.tensor(self.execution_data["t_plan"]) / self.max_skill_len).to(torch.int)
-        latent = self.execution_data["z_hat"][:,t_sk:t_sk+1,:].permute(1,0,2) # (sk, bs, latent)
+        latent = self.execution_data["z_hat"][:,t_sk:t_sk+1,:] # (bs, 1, latent)
         data["latent"] = latent
         data["img_feat"] = img_src
         data["img_pe"] = img_pe

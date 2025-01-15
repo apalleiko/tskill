@@ -60,12 +60,6 @@ def parse_args():
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--save-videos", action="store_true")
     parser.add_argument(
-        "--cond-dec",
-        type=int,
-        default=None,
-        help="override conditional decoding",
-    )
-    parser.add_argument(
         "--cond-plan",
         type=int,
         default=None,
@@ -142,20 +136,13 @@ def main():
     model: TSkillCVAE | TSkillPlan = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
     load_dict = checkpoint_io.load("model_best.pt")
+    # load_dict = checkpoint_io.load("model.pt")
     model.to(model._device)
     if method == "plan":
         vae = model.vae
     else:
         vae = model
     model.eval()
-
-    if args.cond_dec is not None:
-        if args.cond_dec:
-            print("ENABLING CONDITIONAL DECODING")
-            vae.conditional_decode = True
-        else:
-            print("DISABLING CONDITIONAL DECODING")
-            vae.conditional_decode = False
 
     if args.cond_plan is not None:
         if args.cond_plan:
@@ -274,32 +261,30 @@ def main():
 
                 if args.true or not args.full_seq:
                     
-                    ### PLOT VAE ACTIONS VS TRUE
+                    # PLOT VAE ACTIONS VS TRUE
+                    # plt.close()
                     # fig = plt.figure(1, figsize=(10,10))
                     # ax = fig.subplots(1,1)
                     # colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
                     # for d in range(vae.action_dim):
                     #     ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
                     #     ax.plot(out["a_hat"][0,:,d],colors[d])
-                    # print(out["a_hat"][0,0:10,:])
-                    # print(out["a_hat"][0,10:20,:])
                     # plt.show()
                     # input("waiting")
-                    # raise ValueError
 
                     if args.vae and method == "plan":
                         pbar.set_postfix(
-                            {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
+                            {"mode": "VAE Single"})
                         a_hat = out["vae_out"]["a_hat"].detach().cpu().squeeze()
                         video_folder = vf + "_VAE_single"
                     elif method == "plan":
                         pbar.set_postfix(
-                            {"mode": "Planned Single", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                            {"mode": "Planned Single", "cond_plan": model.conditional_plan})
                         a_hat = out["a_hat"].detach().cpu().squeeze()
                         video_folder = vf + "_planned_single"
                     else:
                         pbar.set_postfix(
-                            {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
+                            {"mode": "VAE Single"})
                         a_hat = out["a_hat"].detach().cpu().squeeze()
                         video_folder = vf + "_VAE_single"
                     # Invert scaling on the actions
@@ -393,12 +378,12 @@ def main():
                     if method == "plan" and not args.vae:
                         video_folder = vf + "_planned_fullseq"
                         pbar.set_postfix(
-                            {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                            {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan})
                     else:
                         use_vae = True
                         video_folder = vf + "_vae_fullseq"
                         pbar.set_postfix(
-                            {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
+                            {"mode": "VAE Fullseq"})
                             
                     fig = plt.figure(1, figsize=(10,10))
                     (ax1,ax2),(ax3, ax4),(ax5,ax6),(ax7,ax8),(ax9,ax10),(ax11,ax12) = fig.subplots(6,2)
@@ -520,20 +505,19 @@ def main():
                             break
 
                 ## PLOT SIM ACTIONS VS TRUE
-                fig = plt.figure(1, figsize=(10,10))
-                ax = fig.subplots(1,1)
-                colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
-                for d in range(vae.action_dim):
-                    ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
-                    ax.plot(acts[:,d],colors[d])
-                plt.show()
-                input("waiting")
+                # fig = plt.figure(1, figsize=(10,10))
+                # ax = fig.subplots(1,1)
+                # colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
+                # for d in range(vae.action_dim):
+                #     ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
+                #     ax.plot(acts[:,d],colors[d])
+                # plt.show()
+                # input("waiting")
 
                 os.system(f"mkdir -p {args.save_dir}")
                 if args.save_videos:
                     images_to_video(img_obs, video_folder, f"ep_{ind}_obs", 20, 10)
 
-                raise ValueError
             success_rate = num_success / len(idxs)
 
             eval_stats[task_id] = {"success_rate": success_rate}

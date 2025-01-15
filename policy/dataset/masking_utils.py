@@ -15,35 +15,13 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
     return skill_pad_mask
     
 
-def get_dec_ar_masks(num_img_feats, max_skill_len, device='cpu'):
+def get_dec_ar_masks(max_skill_len, device='cpu'):
     """ 
     Decoder autoregressive masks
     """
-    dec_src_len = max_skill_len * (1 + num_img_feats) + 1 # (MSL*(q + img_feats) + z)
     tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_skill_len, device=device)
     # tgt_mask = ~(torch.eye(max_skill_len).to(torch.bool)) # Only allow self attention for single step prediction
-    mem_mask = torch.ones(max_skill_len, dec_src_len, device=device).to(torch.bool) # Start with everything masked
-    src_mask = torch.ones(dec_src_len, dec_src_len, device=device).to(torch.bool) # Start with everything masked
-    src_mask[-1:,-1:] = False # Unmask z self attention
-    for s in range(max_skill_len):
-        im_begin = max_skill_len # Where image tokens begin
-        im_start = max_skill_len + s*num_img_feats
-        im_end = im_start + num_img_feats
-        q_start = 0 # Where q tokens begin
-
-        # Src mask
-        src_mask[s,q_start:s+1] = False # Unmask qpos self attention 
-        src_mask[im_start:im_end, im_begin:im_end] = False # Unmask img features self attention block
-        src_mask[s,im_begin:im_end] = False # Unmask qpos attention to img features
-        src_mask[im_start:im_end,q_start:s+1] = False # Unmask img features attention to qpos
-        src_mask[im_start:im_end,-1] = False # Unmask img features attention to z
-        src_mask[s,-1] = False # Unmask qpos attention to z
-        # Memory mask
-        mem_mask[s,im_begin:im_end] = False # Unmask action attention to img features
-        mem_mask[s,-1] = False # Unmask action attention to z
-        mem_mask[s,q_start:s+1] = False # Unmask action attention to qpos
-
-    return src_mask, mem_mask, tgt_mask
+    return tgt_mask
 
 
 def get_plan_ar_masks(num_img_feats, max_num_skills, goal_mode, device='cpu'):

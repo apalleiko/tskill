@@ -22,10 +22,8 @@ model:
   dropout : 0.1
   nheads : 8
   dim_feedforward : 1024
-  enc_layers : 0
   dec_layers : 6
   pre_norm : False
-  conditional_decode: False
   conditional_plan: True # Alt
 
 loss:

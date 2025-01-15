@@ -130,9 +130,9 @@ class DataAugmentation:
         return data
     
     def additive_input_noise(self, data):
-        feat_std = 0.00
-        pos_std = 0.001
-        act_std = 0.01
+        # feat_std = 0.00
+        pos_std = 0.002
+        act_std = 0.02
         
         val = torch.rand(1)
         if self.input_noise > val:
@@ -194,28 +194,6 @@ class DataAugmentation:
 
         for m in range(n):
             data["rgb"][m,...] = ra(data["rgb"][m,...]).clamp(0,1)
-
-        return data
-    
-    def seq_masking(self, data):
-        """Encoder input sequence masking function. Masks a specfic timestep for all inputs.
-        Doesn't mask inputs to decoder"""
-        if "rgb" in data.keys():
-            n_cam = data["rgb"].shape[1]
-        elif "img_feat" in data.keys():
-            n_cam = data["img_feat"].shape[1]
-
-        # Randomly apply mask to each input timestep
-        enc_mask = torch.rand(self.max_seq_len) < self.seq_masking_rate
-        enc_mask = enc_mask.unsqueeze(0).repeat(self.max_seq_len, 1)
-        enc_mask = enc_mask.fill_diagonal_(False) # Allow self attention
-
-        data["enc_mask"] = enc_mask
-
-        # Check if mask + padding yields a fully masked input sequence
-        # If so, deactivate the input mask
-        if torch.all(data["seq_pad_mask"] | data["enc_src_mask"][0,:]):
-            data["enc_src_mask"] = torch.zeros_like(data["enc_src_mask"])
 
         return data
     

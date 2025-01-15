@@ -20,16 +20,6 @@ def build_transformer(args):
     decoder.d_model = args["hidden_dim"]
     return decoder
 
-    # return nn.Transformer(
-    #     d_model=args["hidden_dim"],
-    #     dropout=args["dropout"],
-    #     nhead=args["nheads"],
-    #     dim_feedforward=args["dim_feedforward"],
-    #     num_encoder_layers=args["enc_layers"],
-    #     num_decoder_layers=args["dec_layers"],
-    #     norm_first=args["pre_norm"],
-    # )
-
 
 def get_model(cfg, device=None):
     cfg_model = cfg["model"]
@@ -52,7 +42,6 @@ def get_model(cfg, device=None):
         vae_cfg = cfg["vae_cfg"]
 
     vae = get_vae(vae_cfg, device=device)
-    vae.conditional_decode = cfg_model["conditional_decode"]
     stt_encoder = vae.stt_encoder
 
     if not train_stt_encoder:

@@ -20,18 +20,6 @@ def build_transformer(args):
     return decoder
 
 
-# def build_transformer(args):
-#     return nn.Transformer(
-#         d_model=args["hidden_dim"],
-#         dropout=args["dropout"],
-#         nhead=args["nheads"],
-#         dim_feedforward=args["dim_feedforward"],
-#         num_encoder_layers=args["enc_layers"],
-#         num_decoder_layers=args["dec_layers"],
-#         norm_first=args["pre_norm"],
-#     )
-
-
 def get_model(cfg, device=None):
     cfg_model = cfg["model"]
     for name in ["state_encoder", "encoder", "decoder"]:
@@ -50,7 +38,6 @@ def get_model(cfg, device=None):
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
 
-    cond_dec = cfg_model.get("conditional_decode",False)
     ar_dec = cfg_model.get("autoregressive_decode",False)
     encode_state = cfg_model.get("encode_state",True)
     encoder_is_causal = cfg_model.get("encoder_is_causal",False)
@@ -63,7 +50,6 @@ def get_model(cfg, device=None):
         action_dim=cfg_model["action_dim"],
         max_skill_len=cfg_model["max_skill_len"],
         z_dim=cfg_model["z_dim"],
-        conditional_decode=cond_dec,
         autoregressive_decode=ar_dec,
         encode_state=encode_state,
         encoder_is_causal=encoder_is_causal,
