@@ -130,18 +130,19 @@ class DataAugmentation:
         return data
     
     def additive_input_noise(self, data):
-        feat_std = 0.001
+        feat_std = 0.00
         pos_std = 0.001
-        # vel_std = 0.005
+        act_std = 0.01
         
         val = torch.rand(1)
         if self.input_noise > val:
-            state_noise = torch.randn(data["state"].shape)
-            state_noise = state_noise*pos_std
-            feat_noise = feat_std*torch.abs(torch.randn(data["img_feat"].shape))
-            
+            state_noise = pos_std * torch.randn(data["state"].shape)
+            # feat_noise = feat_std*torch.abs(torch.randn(data["img_feat"].shape))
+            act_noise = act_std*torch.randn(data["actions"].shape)
+
             data["state"] = data["state"] + state_noise
-            data["img_feat"] = data["img_feat"] + feat_noise
+            # data["img_feat"] = data["img_feat"] + feat_noise
+            data["actions"] = data["actions"] + act_noise
 
         return data
 

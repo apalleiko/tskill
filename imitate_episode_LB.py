@@ -217,7 +217,7 @@ def main():
             f"{args.benchmark}_{args.seed}_on{task_id}.stats",
         )
 
-        video_folder = os.path.join(
+        vf = os.path.join(
             args.save_dir,
             f"{args.benchmark}_{args.seed}_on{task_id}_videos",
         )
@@ -262,34 +262,46 @@ def main():
                 pbar.set_description(f"Replaying {ind}")
                 img_obs = []
 
-                # print("RUNNING TEST FORWARD PASS")
-                # data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
-                # data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
-                # data["state"][0,0,:] = cd["state"]
-                # out = model(data, use_precalc=False)
+                print("\nDoing model forward pass...")
+                if not args.vae and not args.full_seq and method == "plan":
+                    print("\nResetting Initial Data!!")
+                    data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
+                    data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
+                    data["state"][0,0,:] = cd["state"]
+                    
+                out = model(data, use_precalc=False)
                 # planned_actions = dataset.action_scaling(out["a_hat"][0,...],"inverse").numpy()
 
                 if args.true or not args.full_seq:
-                    print("Doing model forward pass...")
-                    if not args.vae and method == "plan":
-                        data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
-                        data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
-                        data["state"][0,0,:] = cd["state"]
-                        
-                    out = model(data, use_precalc=False)
+                    
+                    ### PLOT VAE ACTIONS VS TRUE
+                    # fig = plt.figure(1, figsize=(10,10))
+                    # ax = fig.subplots(1,1)
+                    # colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
+                    # for d in range(vae.action_dim):
+                    #     ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
+                    #     ax.plot(out["a_hat"][0,:,d],colors[d])
+                    # print(out["a_hat"][0,0:10,:])
+                    # print(out["a_hat"][0,10:20,:])
+                    # plt.show()
+                    # input("waiting")
+                    # raise ValueError
 
                     if args.vae and method == "plan":
                         pbar.set_postfix(
                             {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
                         a_hat = out["vae_out"]["a_hat"].detach().cpu().squeeze()
+                        video_folder = vf + "_VAE_single"
                     elif method == "plan":
                         pbar.set_postfix(
                             {"mode": "Planned Single", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
                         a_hat = out["a_hat"].detach().cpu().squeeze()
+                        video_folder = vf + "_planned_single"
                     else:
                         pbar.set_postfix(
                             {"mode": "VAE Single", "cond_dec": vae.conditional_decode})
                         a_hat = out["a_hat"].detach().cpu().squeeze()
+                        video_folder = vf + "_VAE_single"
                     # Invert scaling on the actions
                     a_hat = dataset.action_scaling(a_hat, "inverse").numpy()
                     pred_actions = [a_hat[i,:] for i in range(a_hat.shape[0])]
@@ -314,6 +326,7 @@ def main():
 
                     for t, a in enumerate(actions):
                         
+                        ### PLOT REAL TIME OBS VS TRUE
                         # fig.canvas.flush_events()
                         # ax1.clear()
                         # ax2.clear()
@@ -378,8 +391,14 @@ def main():
                 else:
                     pbar.reset(total=args.max_steps)
                     if method == "plan" and not args.vae:
-                            pbar.set_postfix(
-                                {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                        video_folder = vf + "_planned_fullseq"
+                        pbar.set_postfix(
+                            {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan, "cond_dec": vae.conditional_decode})
+                    else:
+                        use_vae = True
+                        video_folder = vf + "_vae_fullseq"
+                        pbar.set_postfix(
+                            {"mode": "VAE Fullseq", "cond_dec": vae.conditional_decode})
                             
                     fig = plt.figure(1, figsize=(10,10))
                     (ax1,ax2),(ax3, ax4),(ax5,ax6),(ax7,ax8),(ax9,ax10),(ax11,ax12) = fig.subplots(6,2)
@@ -392,24 +411,37 @@ def main():
                     while steps < args.max_steps:
                         current_data = task_dataset.from_obs(obs)
 
-                        if model.goal_mode == "image":
-                            if "goal_feat" in data.keys():
-                                current_data["goal_feat"] = data["goal_feat"]
-                                current_data["goal_pe"] = data["goal_pe"]
+                        if not use_vae:
+                            if model.goal_mode == "image":
+                                if "goal_feat" in data.keys():
+                                    current_data["goal_feat"] = data["goal_feat"]
+                                    current_data["goal_pe"] = data["goal_pe"]
+                                else:
+                                    current_data["goal"] = data["goal"]
+                            elif model.goal_mode == "one-hot":
+                                pass
                             else:
-                                current_data["goal"] = data["goal"]
-                        elif model.goal_mode == "one-hot":
-                            pass
+                                raise ValueError
                         else:
-                            raise ValueError
-
+                            if steps == data["actions"].shape[1]:
+                                break
+                            skill_num = steps // model.max_skill_len
+                            # img_src, img_pe = vae.stt_encoder(data["rgb"])
+                            img_src, img_pe = torch.zeros(1,1,2,1,128), torch.zeros(1,1,2,1,128)
+                            img_src = img_src.transpose(0,1) # (bs, seq, ...)
+                            img_pe = img_pe.transpose(0,1)
+                            current_data["latent"] = out["mu"][:,skill_num:skill_num+1,:]
+                            current_data["state"] = data["state"][:,steps:steps+1,:]
+                            current_data["img_feat"] = img_src
+                            current_data["img_pe"] = img_pe
                         actions = model.get_action(current_data, steps)
+                        acts = torch.cat((acts, actions), dim=0)
                         actions = dataset.action_scaling(actions,"inverse").numpy()[0,:]
                         obs, reward, done, info = env.step(actions)
                         img = env.sim.render(512,512,camera_name="frontview")[::-1,...]
-                        # img = obs["agentview_image"][::-1,...]
                         img_obs.append(img)
 
+                        ### PLOT REAL TIME OBS VS TRUE
                         # t=steps
                         # fig.canvas.flush_events()
                         # ax1.clear()
@@ -461,6 +493,8 @@ def main():
                         
                         # fig.canvas.draw()
                         # plt.pause(0.05)
+
+                        ### VIEW INTERMEDIATE VALUES
                         # num_skills = (steps // model.max_skill_len) + 1
                         # t_act = steps % model.max_skill_len
                         # print(f"==>> t_act: {t_act}")
@@ -475,20 +509,31 @@ def main():
                         # print(f"==>> num_skills: {num_skills}")
                         # if steps % model.max_skill_len == 0:
                         #     print("True z_hat: ", out["z_hat"][0,:num_skills,:])
+                        # input("Waiting...")
 
                         steps += 1
                         pbar.update()
-                        # input("Waiting...")
 
                         if done:
                             print("Success!")
                             num_success += 1
                             break
 
+                ## PLOT SIM ACTIONS VS TRUE
+                fig = plt.figure(1, figsize=(10,10))
+                ax = fig.subplots(1,1)
+                colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
+                for d in range(vae.action_dim):
+                    ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
+                    ax.plot(acts[:,d],colors[d])
+                plt.show()
+                input("waiting")
+
                 os.system(f"mkdir -p {args.save_dir}")
                 if args.save_videos:
                     images_to_video(img_obs, video_folder, f"ep_{ind}_obs", 20, 10)
 
+                raise ValueError
             success_rate = num_success / len(idxs)
 
             eval_stats[task_id] = {"success_rate": success_rate}

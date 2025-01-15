@@ -191,7 +191,7 @@ def main(args):
     lr_decay = cfg["training"].get("lr_decay",1)
     if lr_decay < 1 and lr_decay!=0:
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=100)
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
         if we := cfg["training"].get("lr_warmup_epochs",0) > 0:
             scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=we)
             scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler_wu, scheduler],[we])

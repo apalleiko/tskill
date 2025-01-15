@@ -125,15 +125,11 @@ class TSkillCVAE(nn.Module):
         data:
             qpos: bs, seq, qpos_dim
             images: bs, seq, num_cam, 3, h, w
-            /img_feat: bs, seq, num_cam, c, h, w
+            /img_feat: bs, seq, num_cam, h*w, c
             /img_pe: bs, seq, num_cam, hidden, h, w
             actions: bs, seq, action_dim
             seq_pad_mask: Padding mask for input sequence (bs, seq)
             skill_pad_mask: Padding mask for skill sequence (bs, max_num_skills)
-            enc_mask: Encoder input mask:L (bs, (2+num_cam)*seq)
-            dec_mask: (bs, MSL*(2+num_features*num_cam), ")
-            mem_mask: (bs, MSL, MSL*(2+num_features*num_cam))
-            tgt_mask: (bs, MSL, MSL)
         """
         qpos = data["state"].to(self._device)
         actions = data["actions"].to(self._device)
@@ -145,6 +141,7 @@ class TSkillCVAE(nn.Module):
 
         ### Calculate image features or use precalculated from dataset
         use_precalc = kwargs.get("use_precalc",False)
+        ### Case where don't need to use images at all
         if not self.encode_state and not self.conditional_decode:
             img_src, img_pe = torch.zeros(SEQ, BS, 1, 1, 1, device=self._device), torch.zeros(SEQ, BS, 1, 1, 1, device=self._device)
         else:
@@ -354,6 +351,8 @@ class TSkillCVAE(nn.Module):
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
             # dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
+            # dec_tgt = self.enc_action_proj(self.dec_tgt_start_token).repeat(tgt.shape[1], bs, 1)
+            
             dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)
         else:
@@ -526,7 +525,6 @@ class TSkillCVAE(nn.Module):
 
             self.execution_data["dec_tgt"] = torch.cat((dec_tgt, a_pred[-1:,...].permute(1,0,2)), dim=1) # (1, seq + 1, act_dim)
             a_t = a_pred.detach()[-1,...] # Take most recent action
-
         else:
             if t_act == 0:
                 seq_pad_mask = torch.zeros(1,self.max_skill_len)

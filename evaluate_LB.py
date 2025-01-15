@@ -65,7 +65,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
     # descriptions = [benchmark.get_task(i).language for i in range(10)]
     # task_embs = get_task_embs(cfg, descriptions)
     # benchmark.set_task_embs(task_embs)
-    
+
     if isinstance(dataset, MultitaskDataset):
         tasks = list(range(90))
     else:
@@ -73,9 +73,10 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
     eval_stats = dict()
     
-    for s in seed:
-        for task_id in tasks:
-            eval_stats[task_id] = dict()
+    for task_id in tasks:
+        eval_stats[task_id] = dict()
+        for s in seed:
+            s = s.item()
 
             if task_id == -1:
                 demo_name = dataset.dataset_file.split('/')[-1].split('.')[0][:-5]
@@ -132,7 +133,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
                 pbar.reset(total=max_steps)
                 pbar.set_postfix({"Batch": i})
-                
+
                 with torch.no_grad(), VideoWriter(video_folder + f"_{i}", save_videos) as video_writer:
                     while steps < max_steps:
                         data = [dataset.from_obs(o) for o in obs]
@@ -161,7 +162,6 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
                     print(dones)
 
                 if all(dones):
-                    print("Success!")
                     break
                 
                 for env in env_i:
@@ -170,9 +170,8 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
             for k in range(env_num):
                 num_success += int(dones[k])
 
-            print(dones)
-
             success_rate = num_success / env_num
+            print(f"Task {task_id}, seed {s} success rate: {success_rate}")
             
             eval_stats[task_id][s] = success_rate
 
@@ -185,7 +184,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
 if __name__ == "__main__":
 
-    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/004"
+    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/003"
     cfg_path = os.path.join(model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     method = cfg["method"]
@@ -204,4 +203,4 @@ if __name__ == "__main__":
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(model_dir, model=model)
     load_dict = checkpoint_io.load("model_best.pt")
-    print(evalute(cfg, model, train_dataset, [4], 30, 15))
+    print(evalute(cfg, model, train_dataset, [2], 20, 10))
