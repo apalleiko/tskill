@@ -170,7 +170,7 @@ class TSkillPlan(nn.Module):
                                       qpos_plan, 
                                       img_info_plan,
                                       z_tgt, skill_pad_mask,
-                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+                                      plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
             
             ### Get autoregressive masks, if applicable
             if self.vae.autoregressive_decode:
@@ -192,7 +192,7 @@ class TSkillPlan(nn.Module):
                                       qpos_plan,
                                       img_info_plan,
                                       z_tgt, skill_pad_mask,
-                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+                                      plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
 
             a_hat = vae_out = None
 
@@ -203,7 +203,7 @@ class TSkillPlan(nn.Module):
 
     def forward_plan(self, goal_info, qpos, img_info, 
                      tgt, tgt_pad_mask, 
-                     src_mask=None, mem_mask=None, tgt_mask=None):
+                     mem_mask=None, tgt_mask=None):
         """Plan skill sequence based on current robot state and image input with goal state
         args:
             - goal_info: tuple of
@@ -284,18 +284,6 @@ class TSkillPlan(nn.Module):
         tgt = self.tgt_norm(tgt)
 
         # query encoder model
-        # z_output = self.transformer(src=src, 
-        #                             src_key_padding_mask=None, 
-        #                             src_is_causal=False,
-        #                             src_mask = src_mask,
-        #                             memory_key_padding_mask=None,
-        #                             memory_mask=mem_mask,
-        #                             memory_is_causal=False, 
-        #                             tgt=tgt,
-        #                             tgt_key_padding_mask=tgt_pad_mask,
-        #                             tgt_is_causal=True,
-        #                             tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
-        
         z_output = self.transformer(tgt, src, tgt_mask=tgt_mask, memory_mask=mem_mask,
                                     tgt_key_padding_mask=tgt_pad_mask,
                                     memory_key_padding_mask=None,
@@ -316,13 +304,13 @@ class TSkillPlan(nn.Module):
         if t==0 or replan:
             self.execution_data = dict()
             self.execution_data["t_plan"] = 0
-            self.execution_data["z_tgt"] = self.tgt_start_token.repeat(bs,1,1)
-            self.execution_data["actions"] = None
 
         # Get next skill prediction if appropriate
         if self.execution_data["t_plan"] % self.max_skill_len == 0:
             # Set or update data related to current planning segment
             if self.execution_data["t_plan"] == 0:
+                self.execution_data["z_tgt"] = self.tgt_start_token.repeat(bs,1,1)
+                self.execution_data["actions"] = None
                 self.execution_data["img_feat"] = img_src # (bs, seq, ...)
                 self.execution_data["img_pe"] = img_pe
                 self.execution_data["state"] = data["state"] # (bs, seq, state_dim)

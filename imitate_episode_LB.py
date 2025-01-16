@@ -379,6 +379,7 @@ def main():
                         video_folder = vf + "_planned_fullseq"
                         pbar.set_postfix(
                             {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan})
+                        use_vae = False
                     else:
                         use_vae = True
                         video_folder = vf + "_vae_fullseq"
@@ -411,14 +412,8 @@ def main():
                             if steps == data["actions"].shape[1]:
                                 break
                             skill_num = steps // model.max_skill_len
-                            # img_src, img_pe = vae.stt_encoder(data["rgb"])
-                            img_src, img_pe = torch.zeros(1,1,2,1,128), torch.zeros(1,1,2,1,128)
-                            img_src = img_src.transpose(0,1) # (bs, seq, ...)
-                            img_pe = img_pe.transpose(0,1)
                             current_data["latent"] = out["mu"][:,skill_num:skill_num+1,:]
-                            current_data["state"] = data["state"][:,steps:steps+1,:]
-                            current_data["img_feat"] = img_src
-                            current_data["img_pe"] = img_pe
+
                         actions = model.get_action(current_data, steps)
                         acts = torch.cat((acts, actions), dim=0)
                         actions = dataset.action_scaling(actions,"inverse").numpy()[0,:]

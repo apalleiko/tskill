@@ -2,7 +2,7 @@ method: skill
 notes:
 data:
   mode: libero
-  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/KITCHEN_SCENE1_open_the_top_drawer_of_the_cabinet_and_put_the_bowl_in_it_demo.hdf5"
+  dataset: "/home/mrl/Documents/Projects/tskill/LIBERO/libero/datasets/libero_90/"
   val_split: .1
   preshuffle: False
   max_seq_len: 380
@@ -22,8 +22,8 @@ data:
 model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
-  z_dim : 32
-  hidden_dim: 128
+  z_dim : 16
+  hidden_dim: 1024
   max_skill_len: 10
   autoregressive_decode: True
   encode_state: True
@@ -54,10 +54,10 @@ loss:
   # cont_weight: 0.000
 
 training:
-  out_dir: out/VAE/033
-  max_it: 25000
-  batch_size: 8
-  batch_size_val: 8
+  out_dir: out/VAE/035
+  max_it: 50000
+  batch_size: 6
+  batch_size_val: 6
   print_every: 50
   visualize_every: 2000
   checkpoint_every: 1000

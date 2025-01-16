@@ -47,7 +47,7 @@ benchmark_map = {
 def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
     model.eval()
     if isinstance(seed, int):
-        seed = [seed]
+        seed = torch.ones(1, dtype=torch.int16) * seed
     elif isinstance(seed, list) and len(seed) == 1:
         seed = torch.randint(0,5000,(seed[0],))
 
@@ -103,34 +103,37 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
                 "camera_widths": 128,
             }
 
-            num_batches = env_num // batch_size
-            envs = [OffScreenRenderEnv(**env_args) for i in range(env_num)]
-            pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
 
             init_states_path = os.path.join(
                 cfg["libero_cfg"]["init_states_folder"], task.problem_folder, task.init_states_file
             )
             init_states = torch.load(init_states_path)
             indices = np.arange(env_num) % init_states.shape[0]
+            print(f"==>> indices: {indices}")
             init_states_ = init_states[indices]
 
             dones = [False] * env_num
+            num_batches = env_num // batch_size
 
             for i in range(num_batches):
-                env_i = envs[i*batch_size:(i+1)*batch_size]
+                print("Creating environments...")
+                env_i = [OffScreenRenderEnv(**env_args) for i in range(batch_size)]
                 obs = []
                 for j in range(len(env_i)):
+                    idx = i*batch_size + j
                     env = env_i[j]
                     env.reset()
                     env.seed(s)
-                    obs.append(env.set_init_state(init_states_[j]))
+                    env.set_init_state(init_states_[idx])
                     for _ in range(5):  # simulate the physics without any actions
-                        env.step(np.zeros(7))
-                
+                        obs_j, _, done_j, _ = env.step(np.zeros(7))
+                    obs.append(obs_j)
+
                 steps = 0
                 num_success = 0
                 max_steps = 250
 
+                pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
                 pbar.reset(total=max_steps)
                 pbar.set_postfix({"Batch": i})
 
@@ -148,18 +151,19 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
                             env = env_i[j]
                             obs_j, _, done_j, _ = env.step(actions[j,:])
                             if done_j:
-                                dones[j] = True
-                                # env_i.pop(j)
+                                idx = i*batch_size + j
+                                dones[idx] = True
                             obs.append(obs_j)
                         
+                        batch_dones = dones[i*batch_size:(i+1)*batch_size]
                         video_writer.append_vector_obs(
-                        obs, dones, camera_name="agentview_image"
+                        obs, batch_dones, camera_name="agentview_image"
                         )
                             
                         steps += 1
                         pbar.update()
                     
-                    print(dones)
+                    print(batch_dones)
 
                 if all(dones):
                     break
@@ -184,7 +188,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
 if __name__ == "__main__":
 
-    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/003"
+    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/005"
     cfg_path = os.path.join(model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     method = cfg["method"]
@@ -202,5 +206,5 @@ if __name__ == "__main__":
     # Model
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
-    print(evalute(cfg, model, train_dataset, [2], 20, 10))
+    load_dict = checkpoint_io.load("model_good2.pt")
+    print(evalute(cfg, model, train_dataset, [4], 40, 8))

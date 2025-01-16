@@ -403,7 +403,7 @@ class TSkillCVAE(nn.Module):
         # Define current info
         t_act = t % self.max_skill_len
         dec_skill_pad_mask = torch.zeros(1,1)
-        latent = data["latent"]
+        latent = data["latent"] # (bs, 1, z_dim)
         bs = latent.shape[0]
 
         if self.autoregressive_decode:
