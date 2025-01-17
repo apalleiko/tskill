@@ -94,6 +94,7 @@ class LiberoDataset(Dataset):
         self.generate_dec_ar_masks = autoregressive_decode
         self.generate_enc_causal_masks = encoder_is_causal
         self.goal_mode = goal_mode # Either image, or the task vector/embedding to use as the goal instead
+        self.use_precalc = kwargs.get("use_precalc")
         self.add_batch_dim = kwargs.get("add_batch_dim",False)
         self.pad2msl = kwargs.get("pad2msl",False)
         if self.pad2msl:
@@ -132,11 +133,10 @@ class LiberoDataset(Dataset):
         actions = self.action_scaling(torch.from_numpy(trajectory["actions"])[i0:,:].float()) # (seq, act_dim)
         state = self.state_scaling(torch.from_numpy(obs["state"])[i0:,:].float()) # (seq, state_dim)
 
-        if False and "resnet18" in trajectory["obs"].keys():
+        if self.use_precalc and "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
             img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
-            # img_pe2 =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe"][i0:,...]) # (seq, num_cams, h*w, hidden)
         else:
             use_precalc = False
             rgb = rescale_rgbd(obs["rgb"], separate_cams=True)

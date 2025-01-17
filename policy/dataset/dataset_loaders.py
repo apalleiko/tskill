@@ -58,6 +58,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         max_seq_len = cfg_data.get("max_seq_len", 0)
         batch_size = cfg["training"]["batch_size"]
         batch_size_val = cfg["training"]["batch_size_val"]
+        use_precalc = cfg["training"]["use_precalc"]
 
         # Scale actions/states, or compute normalization for the dataset
         action_scaling = cfg_vae["data"].get("action_scaling",1)
@@ -278,14 +279,14 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                             act_scaling, stt_scaling,
                             full_seq, autoregressive_decode, encoder_is_causal,
                             goal_mode, add_batch_dim=add_batch_dim,
-                            pad2msl=pad2msl_train)
+                            pad2msl=pad2msl_train, use_precalc=use_precalc)
         val_dataset = ds(method, dataset_file, val_mapping, 
                             max_seq_len, max_skill_len,
                             pad, None,
                             act_scaling, stt_scaling,
                             full_seq_val, autoregressive_decode, encoder_is_causal,
                             goal_mode, add_batch_dim=add_batch_dim,
-                            pad2msl=pad2msl_val)
+                            pad2msl=pad2msl_val, use_precalc=use_precalc)
 
         if multitask:
             return train_dataset, val_dataset, data_info

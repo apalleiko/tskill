@@ -120,7 +120,6 @@ def main():
     # Dataset
     cfg["data"]["pad"] = True
     cfg["data"]["augment"] = False
-    use_precalc = True
 
     train_dataset, val_dataset = dataset_loader(cfg, return_datasets=True, 
                                                 fullseq_override=True)
@@ -183,10 +182,11 @@ def main():
             task = [t for t in benchmark.tasks if t.name == demo_name][0]
             data_info = data_info_all
 
-        print("RUNNING ON TASK: ",task.name)
+        print(f"RUNNING ON TASK {task_id}: ",task.name)
         # Have to toggle dataset padding, because is done in collate function for training
         task_dataset.pad = True
         task_dataset.pad2msl = True
+        task_dataset.use_precalc = False
 
         # Load only the full episode version of the dataset
         if "train_ep_indices" not in data_info.keys():
@@ -251,12 +251,12 @@ def main():
 
                 print("\nDoing model forward pass...")
                 if not args.vae and not args.full_seq and method == "plan":
-                    print("\nResetting Initial Data!!")
+                    print("Resetting Initial Data!!")
                     data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
                     data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
                     data["state"][0,0,:] = cd["state"]
-                    
-                out = model(data, use_precalc=False)
+                
+                out = model(data, use_precalc=dataset.use_precalc)
                 # planned_actions = dataset.action_scaling(out["a_hat"][0,...],"inverse").numpy()
 
                 if args.true or not args.full_seq:

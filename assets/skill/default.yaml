@@ -13,7 +13,7 @@ data:
   augmentation:
     subsequence_rate: 0.8
     image_aug: 0.
-    input_noise: 0.9
+    input_noise: 0.8
   max_count: 50
   indices:
   full_seq: False
@@ -23,7 +23,7 @@ model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
   z_dim : 16
-  hidden_dim: 1024
+  hidden_dim: 512
   max_skill_len: 10
   autoregressive_decode: True
   encode_state: True
@@ -33,6 +33,7 @@ model:
     dropout : 0.1
     nheads : 8
     dim_feedforward : 1024
+    enc_layers : 4
     dec_layers : 6
     pre_norm : False
   
@@ -40,7 +41,8 @@ model:
     dropout : 0.1
     nheads : 8
     dim_feedforward : 1024
-    dec_layers : 4
+    enc_layers : 2
+    dec_layers : 3
     pre_norm : False
   
   state_encoder:
@@ -49,28 +51,28 @@ model:
     position_embedding: sine
 
 loss:
-  kl_weight: .001
+  kl_weight: 0.001
   # kl_weight_final: 0.01
   # cont_weight: 0.000
 
 training:
-  out_dir: out/VAE/035
-  max_it: 50000
-  batch_size: 6
-  batch_size_val: 6
+  out_dir: out/VAE/040
+  max_it: 1500
+  batch_size: 8
+  batch_size_val: 8
   print_every: 50
   visualize_every: 2000
   checkpoint_every: 1000
-  validate_every: 500
-  backup_every: 500
+  validate_every: 1000
+  backup_every: 1000
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.00001
-  lr: 0.00002
-  lr_decay: 0
-  lr_warmup_epochs: 10
+  lr_state_encoder: 0.0000
+  lr: 0.0001
+  lr_decay: 0.99
+  lr_warmup_epochs: 0
   weight_decay: 0.0001
   gradient_accumulation: 1
-  use_precalc: False
+  use_precalc: True

@@ -68,16 +68,16 @@ class TSkillCVAE(nn.Module):
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
         # Create pe scaling factors
-        self.enc_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001, requires_grad=True)
-        self.enc_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.dec_src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.dec_src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.dec_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001, requires_grad=True)
+        self.enc_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
+        self.enc_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
 
         # learned embeddings for the 4 input types (action, state, image, skill)
         self.input_embed = nn.Embedding(4, self.hidden_dim) 
-        self.input_embed_scale_factor = nn.Parameter(torch.ones(4, 1) * 0.01, requires_grad=True)
+        self.input_embed_scale_factor = nn.Parameter(torch.ones(4, 1) * 0.01)
 
         ### Backbone
         self.stt_encoder = stt_encoder
@@ -104,7 +104,7 @@ class TSkillCVAE(nn.Module):
         self.dec_input_z_norm = self.norm(self.hidden_dim)
         self.dec_src_norm = self.norm(self.hidden_dim)
         self.dec_tgt_norm = self.norm(self.hidden_dim)
-        self.dec_tgt_start_token = nn.Parameter(0.1 * torch.randn(1,1,self.action_dim), requires_grad=True)
+        self.dec_tgt_start_token = nn.Parameter(torch.zeros(1,1,self.action_dim))
 
         # Action heads
         self.dec_action_joint_proj = nn.Linear(self.hidden_dim, action_dim - 1) # Decode joint actions
@@ -136,18 +136,15 @@ class TSkillCVAE(nn.Module):
         BS, SEQ = seq_pad_mask.shape
         _, MNS = skill_pad_mask.shape
 
-        ### Calculate image features or use precalculated from dataset
-        use_precalc = kwargs.get("use_precalc",False)
-        ### Case where don't need to use images at all
+        ### Which image input to use.
         if not self.encode_state:
             img_src, img_pe = torch.zeros(SEQ, BS, 1, 1, 1, device=self._device), torch.zeros(SEQ, BS, 1, 1, 1, device=self._device)
+        elif kwargs.get("use_precalc",False):
+            img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
+            img_pe = data["img_pe"].transpose(0,1).to(self._device)
         else:
-            if use_precalc:
-                img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
-                img_pe = data["img_pe"].transpose(0,1).to(self._device)
-            else:
-                images = data["rgb"].to(self._device)
-                img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
+            images = data["rgb"].to(self._device)
+            img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
 
         ### Get causal/other masks, if applicable
         # Encoder causal masks
@@ -196,7 +193,8 @@ class TSkillCVAE(nn.Module):
                        src_mask=None, mem_mask=None, tgt_mask=None):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         img_feat, img_pe = img_info # (seq, bs, num_cam, h*w, hidden)
-        SEQ, BS, NUM_CAM, _, _ = img_feat.shape
+        BS, SEQ, _ = qpos.shape # Use bs for masking
+        NUM_CAM = img_feat.shape[2]
         MNS = tgt_pad_mask.shape[1]
 
         # Get a batch mask for eliminating fully padded inputs during training
@@ -234,6 +232,7 @@ class TSkillCVAE(nn.Module):
 
             # encoder src
             enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # ((2+num_cam)*seq, bs, hidden_dim)
+            # obtain seq position embedding for input
             enc_src_pe = self.get_pos_table(SEQ) * self.enc_src_pos_scale_factor
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
             enc_src_pe = enc_src_pe.repeat((2+NUM_CAM), BS, 1)  # ((2+num_cam)*seq, bs, hidden_dim)
@@ -249,9 +248,9 @@ class TSkillCVAE(nn.Module):
         else:
             enc_src = action_src # (seq, bs, hidden_dim)
             # obtain seq position embedding for input
-            # enc_src_pe = self.get_pos_table(SEQ) * self.enc_src_pos_scale_factor
+            enc_src_pe = self.get_pos_table(SEQ) * self.enc_src_pos_scale_factor
             # Alternative action seq embedding
-            enc_src_pe = (self.get_pos_table(self.max_skill_len)).repeat(BS, MNS, 1) * self.enc_src_pos_scale_factor
+            # enc_src_pe = (self.get_pos_table(self.max_skill_len)).repeat(BS, MNS, 1) * self.enc_src_pos_scale_factor
             enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, bs, hidden_dim)
             enc_src = self.enc_src_norm(enc_src)
             enc_src = enc_src + enc_src_pe
@@ -262,13 +261,23 @@ class TSkillCVAE(nn.Module):
         enc_tgt = self.enc_tgt_norm(enc_tgt)
         enc_tgt = enc_tgt + enc_tgt_pe
 
-        if self.encoder_is_causal:
-            src_pad_mask = tgt_pad_mask = None # Padded outputs are ignored in loss downstream
+        # query encoder model
+        enc_output = self.encoder(src=enc_src,
+                                  src_key_padding_mask=src_pad_mask, 
+                                  src_is_causal=self.encoder_is_causal,
+                                  src_mask=src_mask,
+                                  memory_key_padding_mask=src_pad_mask,
+                                  memory_mask=mem_mask,
+                                  memory_is_causal=self.encoder_is_causal, 
+                                  tgt=enc_tgt,
+                                  tgt_key_padding_mask=tgt_pad_mask,
+                                  tgt_is_causal=self.encoder_is_causal,
+                                  tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
         
-        enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-                                    tgt_key_padding_mask=tgt_pad_mask,
-                                    memory_key_padding_mask=src_pad_mask,
-                                    tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
+        # enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+        #                             tgt_key_padding_mask=tgt_pad_mask,
+        #                             memory_key_padding_mask=src_pad_mask,
+        #                             tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
 
         latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
         mu = latent_info[:, :, :self.z_dim] # (skill_seq, bs, latent_dim)
@@ -369,7 +378,7 @@ class TSkillCVAE(nn.Module):
         # tgt
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
+            # dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
 
             dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)
@@ -383,14 +392,27 @@ class TSkillCVAE(nn.Module):
         dec_src = z_src # (z, bs, hidden)
         dec_src_pe = z_pe
         mem_mask = None
+        src_mask = None
 
         dec_src = self.dec_src_norm(dec_src)
         dec_src = dec_src + dec_src_pe
+
+        dec_output = self.decoder(src=dec_src,
+                                  src_key_padding_mask=None, 
+                                  src_is_causal=False,
+                                  src_mask=src_mask,
+                                  memory_key_padding_mask=None,
+                                  memory_mask=mem_mask,
+                                  memory_is_causal=False, 
+                                  tgt=dec_tgt,
+                                  tgt_key_padding_mask=tgt_pad_mask,
+                                  tgt_is_causal=self.autoregressive_decode,
+                                  tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
         
-        dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-                                    tgt_key_padding_mask=tgt_pad_mask,
-                                    memory_key_padding_mask=None,
-                                    tgt_is_causal=self.autoregressive_decode)
+        # dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+        #                             tgt_key_padding_mask=tgt_pad_mask,
+        #                             memory_key_padding_mask=None,
+        #                             tgt_is_causal=self.autoregressive_decode)
 
         # Send project output to action dimensions
         a_joint = self.dec_action_joint_proj(dec_output) # (MSL, bs, action_dim - 1)

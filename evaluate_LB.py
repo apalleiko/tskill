@@ -188,7 +188,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
 if __name__ == "__main__":
 
-    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/005"
+    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/006"
     cfg_path = os.path.join(model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     method = cfg["method"]
@@ -206,5 +206,5 @@ if __name__ == "__main__":
     # Model
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(model_dir, model=model)
-    load_dict = checkpoint_io.load("model_good2.pt")
-    print(evalute(cfg, model, train_dataset, [4], 40, 8))
+    load_dict = checkpoint_io.load("model_best.pt")
+    print(evalute(cfg, model, train_dataset, [2], 40, 8))

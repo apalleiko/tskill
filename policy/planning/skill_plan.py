@@ -24,7 +24,9 @@ class TSkillPlan(nn.Module):
                  vae: TSkillCVAE, 
                  conditional_plan,
                  goal_mode,
-                 device, **kwargs):
+                 stt_encoder, 
+                 device, 
+                 **kwargs):
         """ Initializes the model.
         Parameters:
             transformer: pytorch transformer to use in prediction
@@ -32,6 +34,7 @@ class TSkillPlan(nn.Module):
             conditional_plan: whether to plan each skill with current conditional image/state info
             goal_mode: goal mode to use, currently image or one-hot
             device: device to operate on
+            stt_encoder: custom state encoder if desired. Will use VAE by default.
         """
         super().__init__()
         ### General args
@@ -60,7 +63,7 @@ class TSkillPlan(nn.Module):
         self.input_embed_scale_factor = nn.Parameter(torch.ones(3, 1) * 0.01, requires_grad=True)
 
         ### Backbone
-        self.stt_encoder = self.vae.stt_encoder
+        self.stt_encoder = stt_encoder
         self.num_img_feats = 16 # Hardcoded
         self.image_proj = nn.Linear(self.stt_encoder.num_channels, self.hidden_dim)
         self.image_feat_norm = self.norm([self.num_img_feats, self.hidden_dim])
@@ -134,7 +137,7 @@ class TSkillPlan(nn.Module):
 
         ### Get conditional planning masks if applicable
         if self.conditional_plan:
-            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
+            plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
             if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
                 qpos_plan = qpos[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
                 img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
@@ -143,8 +146,8 @@ class TSkillPlan(nn.Module):
                 img_info_plan = (img_src, img_pe) # (MNS, bs, ...) # Only pass in obs at each planning timestep
             goal_info = (goal_src, goal_pe)
         else:
-            plan_src_mask = plan_mem_mask = None
-            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
+            _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
+            plan_mem_mask = None
             qpos_plan = qpos[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
@@ -156,7 +159,10 @@ class TSkillPlan(nn.Module):
             sep_vae_grad = kwargs.get("sep_vae_grad",True)
 
             # Get target skills from vae
-            vae_out = self.vae(data, use_precalc=True)
+            if self.stt_encoder is self.vae.stt_encoder:
+                vae_out = self.vae(data, use_precalc=True)
+            else:
+                vae_out = self.vae(data, use_precalc=False)
             
             # Create tgt shifted right 1 token
             z_tgt0 = self.tgt_start_token.repeat(1,BS,1)

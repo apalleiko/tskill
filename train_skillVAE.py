@@ -116,12 +116,12 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 2
-        cfg["training"]["batch_size_alt"] = 8
+        cfg["training"]["batch_size"] = 6
+        cfg["training"]["batch_size_alt"] = 0
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 11
-        cfg["training"]["validate_every"] = 10
+        cfg["training"]["validate_every"] = 11
         cfg["training"]["checkpoint_every"] = 11
         cfg["training"]["max_it"] = 10
 
@@ -174,8 +174,6 @@ def main(args):
 
     # Model
     model = config.get_model(cfg, device=device)
-    print(model)
-    # model = torch.compile(model)
 
     # Intialize training
     param_dicts = [{"params": [p for n, p in model.named_parameters() if "stt_encoder" not in n and p.requires_grad]}]

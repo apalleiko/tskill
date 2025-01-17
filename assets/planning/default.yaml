@@ -22,6 +22,7 @@ model:
   dropout : 0.1
   nheads : 8
   dim_feedforward : 2048
+  enc_layers : 0
   dec_layers : 6
   pre_norm : False
   conditional_plan: False # Alt
@@ -49,7 +50,7 @@ training:
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.0000
+  lr_state_encoder: 0.00001
   lr: 0.00002
   lr_decay: 0
   lr_warmup_epochs: 2
