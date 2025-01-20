@@ -136,7 +136,7 @@ class LiberoDataset(Dataset):
         if self.use_precalc and "resnet18" in trajectory["obs"].keys():
             use_precalc = True
             img_feat = torch.from_numpy(trajectory["obs"]["resnet18"]["img_feat"][i0:,...]) # (seq, num_cams, h*w, c)
-            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_512"][i0:,...]) # (seq, num_cams, h*w, hidden)
+            img_pe =  torch.from_numpy(trajectory["obs"]["resnet18"]["img_pe_128"][i0:,...]) # (seq, num_cams, h*w, hidden)
         else:
             use_precalc = False
             rgb = rescale_rgbd(obs["rgb"], separate_cams=True)

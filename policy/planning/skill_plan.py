@@ -52,15 +52,15 @@ class TSkillPlan(nn.Module):
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
         # Create pe scaling factors
-        self.src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
-        self.goal_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01, requires_grad=True)
+        self.src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.goal_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
 
         # learned embeddings for the 4 input types (state, image, goal)
         self.input_embed = nn.Embedding(3, self.hidden_dim) 
-        self.input_embed_scale_factor = nn.Parameter(torch.ones(3, 1) * 0.01, requires_grad=True)
+        self.input_embed_scale_factor = nn.Parameter(torch.ones(3, 1) * 0.01)
 
         ### Backbone
         self.stt_encoder = stt_encoder
@@ -84,7 +84,7 @@ class TSkillPlan(nn.Module):
         self.tgt_norm = self.norm(self.hidden_dim)
         self.z_proj = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent
         self.tgt_z_proj = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
-        self.tgt_start_token = nn.Parameter(torch.zeros(1,1,self.z_dim), requires_grad=True)
+        self.tgt_start_token = nn.Parameter(torch.zeros(1,1,self.z_dim))
 
         # Other
         self.metrics = dict()
@@ -137,17 +137,17 @@ class TSkillPlan(nn.Module):
 
         ### Get conditional planning masks if applicable
         if self.conditional_plan:
-            plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
+            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
             if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
                 qpos_plan = qpos[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
                 img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
-            else:
+            else: # only pass in the relevant timesteps
                 qpos_plan = qpos
                 img_info_plan = (img_src, img_pe) # (MNS, bs, ...) # Only pass in obs at each planning timestep
             goal_info = (goal_src, goal_pe)
         else:
-            _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
-            plan_mem_mask = None
+            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, device=self._device)
+            plan_src_mask = plan_mem_mask = None
             qpos_plan = qpos[:,:1,:] # (bs, 1, state_dim)
             img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
             goal_info = (goal_src, goal_pe)
@@ -176,11 +176,18 @@ class TSkillPlan(nn.Module):
                                       qpos_plan, 
                                       img_info_plan,
                                       z_tgt, skill_pad_mask,
-                                      plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+            
+            if torch.any(torch.isnan(z_hat)):
+                with open("ERROR_DATA.pickle",'+wb') as f:
+                    pickle.dump(data, f)
+                raise ValueError(f"NaNs encountered during encoding! Data saved to ERROR_DATA.pickle")
             
             ### Get autoregressive masks, if applicable
             if self.vae.autoregressive_decode:
                 dec_tgt_mask = get_dec_ar_masks(self.max_skill_len, device=self._device)
+            else:
+                dec_tgt_mask = None
             
             ### Decode skills
             if sep_vae_grad: # Turn off vae grad calculation for sequence decoding on pred z
@@ -198,7 +205,7 @@ class TSkillPlan(nn.Module):
                                       qpos_plan,
                                       img_info_plan,
                                       z_tgt, skill_pad_mask,
-                                      plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
+                                      plan_src_mask, plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, latent_dim)
 
             a_hat = vae_out = None
 
@@ -209,7 +216,7 @@ class TSkillPlan(nn.Module):
 
     def forward_plan(self, goal_info, qpos, img_info, 
                      tgt, tgt_pad_mask, 
-                     mem_mask=None, tgt_mask=None):
+                     src_mask=None, mem_mask=None, tgt_mask=None):
         """Plan skill sequence based on current robot state and image input with goal state
         args:
             - goal_info: tuple of
@@ -277,23 +284,35 @@ class TSkillPlan(nn.Module):
         src = torch.cat([state_src, img_src, goal_src], axis=0) # (1 + 2*num_cam*num_feats|*MNS, bs, hidden_dim)
         src_pe = torch.cat([state_pe, img_pe, goal_pe], axis=0)
         # Add and norm
-        src = src + src_pe
         src = self.src_norm(src)
+        src = src + src_pe
 
         # tgt
         tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
-        tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
+        # tgt = torch.zeros_like(tgt, device=self._device) # (MNS|<, bs, hidden_dim)
         tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2).repeat(1, bs, 1) * self.tgt_pos_scale_factor # (MNS|<, bs, hidden_dim)
         # tgt_pe = torch.zeros_like(tgt, device=self._device)
         tgt_pad_mask = None # With isolated time steps, padding a skill leads to NaNs. Padded skills are ignored downstream in loss fcn.
-        tgt = tgt + tgt_pe
         tgt = self.tgt_norm(tgt)
+        tgt = tgt + tgt_pe
 
         # query encoder model
-        z_output = self.transformer(tgt, src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-                                    tgt_key_padding_mask=tgt_pad_mask,
+        z_output = self.transformer(src=src, 
+                                    src_key_padding_mask=None, 
+                                    src_is_causal=False,
+                                    src_mask = src_mask,
                                     memory_key_padding_mask=None,
-                                    tgt_is_causal=True, memory_is_causal=False)
+                                    memory_mask=mem_mask,
+                                    memory_is_causal=False, 
+                                    tgt=tgt,
+                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    tgt_is_causal=True,
+                                    tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+        
+        # z_output = self.transformer(tgt, src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+        #                             tgt_key_padding_mask=tgt_pad_mask,
+        #                             memory_key_padding_mask=None,
+        #                             tgt_is_causal=True, memory_is_causal=False)
 
         z = self.z_proj(z_output) # (skill_seq, bs, 2*latent_dim)
 

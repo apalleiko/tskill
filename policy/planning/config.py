@@ -14,22 +14,22 @@ def freeze_network(network):
 
 def build_transformer(args):
 
-    decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
-                                               norm_first=args["pre_norm"])
-    decoder_norm = nn.LayerNorm(args["hidden_dim"])
-    decoder = nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
-    decoder.d_model = args["hidden_dim"]
-    return decoder
+    # decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
+    #                                            norm_first=args["pre_norm"])
+    # decoder_norm = nn.LayerNorm(args["hidden_dim"])
+    # decoder = nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
+    # decoder.d_model = args["hidden_dim"]
+    # return decoder
 
-    # return nn.Transformer(
-    #     d_model=args["hidden_dim"],
-    #     dropout=args["dropout"],
-    #     nhead=args["nheads"],
-    #     dim_feedforward=args["dim_feedforward"],
-    #     num_encoder_layers=args["enc_layers"],
-    #     num_decoder_layers=args["dec_layers"],
-    #     norm_first=args["pre_norm"],
-    # )
+    return nn.Transformer(
+        d_model=args["hidden_dim"],
+        dropout=args["dropout"],
+        nhead=args["nheads"],
+        dim_feedforward=args["dim_feedforward"],
+        num_encoder_layers=args["enc_layers"],
+        num_decoder_layers=args["dec_layers"],
+        norm_first=args["pre_norm"],
+    )
 
 
 def get_model(cfg, device=None):
@@ -40,6 +40,7 @@ def get_model(cfg, device=None):
         device = torch.device("cuda" if is_cuda else "cpu")
 
     train_stt_encoder = cfg["training"].get("lr_state_encoder", 0)
+    train_vae = cfg["training"].get("train_vae",False)
     cond_plan = cfg_model.get("conditional_plan",False)
     goal_mode = cfg_model.get("goal_mode","image")
 
@@ -53,14 +54,15 @@ def get_model(cfg, device=None):
         vae_cfg = cfg["vae_cfg"]
     vae = get_vae(vae_cfg, device=device)
     
-    if not train_stt_encoder:
+    if not train_vae and train_stt_encoder:
+        stt_encoder = get_stt_encoder(vae_cfg["model"]["state_encoder"])
+    elif train_vae and train_stt_encoder: # Train separate VAE for the model
+        stt_encoder = vae.stt_encoder
+    else:
         print("Freezing state encoder network!")
         stt_encoder = vae.stt_encoder
-        freeze_network(stt_encoder)
-    else: # Train separate VAE for the model
-        stt_encoder = get_stt_encoder(vae_cfg["model"]["state_encoder"])
 
-    if not cfg["training"].get("train_vae",False):
+    if not train_vae:
         print("Freezing CVAE network!")
         freeze_network(vae)
     

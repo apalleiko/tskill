@@ -378,7 +378,7 @@ class TSkillCVAE(nn.Module):
         # tgt
         if self.autoregressive_decode:
             dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            # dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
+            dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
 
             dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
             # dec_tgt_pe = torch.zeros_like(dec_tgt)

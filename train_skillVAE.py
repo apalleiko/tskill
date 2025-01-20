@@ -121,9 +121,9 @@ def main(args):
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1
         cfg["training"]["backup_every"] = 11
-        cfg["training"]["validate_every"] = 11
+        cfg["training"]["validate_every"] = 1
         cfg["training"]["checkpoint_every"] = 11
-        cfg["training"]["max_it"] = 10
+        cfg["training"]["max_it"] = 1
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
@@ -191,7 +191,7 @@ def main(args):
         scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=lr_decay)
         # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=1000)
         if we := cfg["training"].get("lr_warmup_epochs",0) > 0:
-            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.1, total_iters=we)
+            scheduler_wu = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.01, total_iters=we)
             scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [scheduler_wu, scheduler],[we])
     else:
         scheduler = None

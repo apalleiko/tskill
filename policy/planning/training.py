@@ -187,8 +187,6 @@ class Trainer(BaseTrainer):
         # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, z_targ_l, reduction="sum") / num_latent
         # Squared Mehalanobis distance loss
         loss_dict["z_loss"] = self.z_weight * torch.sum(F.mse_loss(z_hat_l, mu_targ_l, reduction="none") / std_targ_l) / num_latent
-        # Squared latent loss
-        # loss_dict["z_loss"] = self.z_weight * F.mse_loss(z_hat_l, lat_targ_l, reduction="sum") / num_latent
 
         # Distance loss
         # dist_hat_l = dist_hat[latent_loss_mask]

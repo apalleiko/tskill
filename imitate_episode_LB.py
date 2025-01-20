@@ -256,7 +256,7 @@ def main():
                     data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
                     data["state"][0,0,:] = cd["state"]
                 
-                out = model(data, use_precalc=dataset.use_precalc)
+                out = model(data, use_precalc=task_dataset.use_precalc)
                 # planned_actions = dataset.action_scaling(out["a_hat"][0,...],"inverse").numpy()
 
                 if args.true or not args.full_seq:
@@ -270,7 +270,6 @@ def main():
                     #     ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
                     #     ax.plot(out["a_hat"][0,:,d],colors[d])
                     # plt.show()
-                    # input("waiting")
 
                     if args.vae and method == "plan":
                         pbar.set_postfix(
@@ -398,7 +397,7 @@ def main():
                         current_data = task_dataset.from_obs(obs)
 
                         if not use_vae:
-                            if model.goal_mode == "image":
+                            if True or model.goal_mode == "image":
                                 if "goal_feat" in data.keys():
                                     current_data["goal_feat"] = data["goal_feat"]
                                     current_data["goal_pe"] = data["goal_pe"]
