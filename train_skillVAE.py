@@ -20,7 +20,7 @@ from policy.dataset.dataset_loaders import dataset_loader
 from policy.training import BaseTrainer as Trainer
 # from policy.simulation_loss import SimLoss
 
-matplotlib.use("Agg")
+# matplotlib.use("Agg")
 torch.backends.cuda.matmul.allow_tf32 = True
 
 def get_args():
@@ -116,7 +116,7 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 6
+        cfg["training"]["batch_size"] = 2
         cfg["training"]["batch_size_alt"] = 0
         cfg["training"]["visualize_every"] = 100
         cfg["training"]["print_every"] = 1

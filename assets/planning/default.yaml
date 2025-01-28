@@ -8,21 +8,21 @@ data:
   max_seq_len: 380
   augment: True
   augmentation:
-    subsequence_rate: 0.8
-    image_aug: 0
-    input_noise: 0.8
+    subsequence_rate: 0.
+    image_aug: 0.
+    input_noise: 0.5
   max_count: 50
   full_seq: False
   full_seq_val: False
 
 model:
   goal_mode: one-hot
-  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/047
+  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/048
   hidden_dim: 128
   dropout : 0.1
   nheads : 8
-  dim_feedforward : 1024
-  enc_layers : 2
+  dim_feedforward : 512
+  enc_layers : 1
   dec_layers : 3
   pre_norm : False
   conditional_plan: False # Alt
@@ -33,8 +33,8 @@ loss:
   dist_weight: 0
 
 training:
-  out_dir: out/Plan/010
-  train_vae: True
+  out_dir: out/Plan/011
+  train_vae: False
   max_it: 50000
   batch_size: 6
   batch_size_val: 6
@@ -50,9 +50,9 @@ training:
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.0000
-  lr: 0.0001
+  lr_state_encoder: 0.00001
+  lr: 0.00003
   lr_decay: 0.9995
   lr_warmup_epochs: 2
   weight_decay: 0.0001
-  use_precalc: True
+  use_precalc: False

@@ -92,11 +92,11 @@ def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, device='cpu
     """
     enc_src_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_seq_len, device=device)
     enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
-    # enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
+    # enc_tgt_mask = ~(torch.eye(max_num_skills).to(torch.bool)) # Only allow self attention for single step prediction
     enc_mem_mask = torch.ones(max_num_skills, max_seq_len, device=device).to(torch.bool)
     for s in range(max_num_skills):
         sk_start = s*max_skill_len
         sk_end = s*max_skill_len + max_skill_len
         # enc_mem_mask[s,sk_start:sk_end] = False # Unmask skill attention to prior sequence items
-        enc_mem_mask[s,:sk_end] = False # Unmask skill attention to prior sequence items
+        enc_mem_mask[s,sk_start:sk_end] = False # Unmask skill attention to prior sequence items
     return enc_src_mask, enc_mem_mask, enc_tgt_mask

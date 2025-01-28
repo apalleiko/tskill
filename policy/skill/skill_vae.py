@@ -262,22 +262,22 @@ class TSkillCVAE(nn.Module):
         enc_tgt = enc_tgt + enc_tgt_pe
 
         # query encoder model
-        enc_output = self.encoder(src=enc_src,
-                                  src_key_padding_mask=src_pad_mask, 
-                                  src_is_causal=self.encoder_is_causal,
-                                  src_mask=src_mask,
-                                  memory_key_padding_mask=src_pad_mask,
-                                  memory_mask=mem_mask,
-                                  memory_is_causal=self.encoder_is_causal, 
-                                  tgt=enc_tgt,
-                                  tgt_key_padding_mask=tgt_pad_mask,
-                                  tgt_is_causal=self.encoder_is_causal,
-                                  tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
-        
-        # enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-        #                             tgt_key_padding_mask=tgt_pad_mask,
-        #                             memory_key_padding_mask=src_pad_mask,
-        #                             tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
+        # enc_output = self.encoder(src=enc_src,
+        #                           src_key_padding_mask=src_pad_mask, 
+        #                           src_is_causal=self.encoder_is_causal,
+        #                           src_mask=src_mask,
+        #                           memory_key_padding_mask=src_pad_mask,
+        #                           memory_mask=mem_mask,
+        #                           memory_is_causal=self.encoder_is_causal, 
+        #                           tgt=enc_tgt,
+        #                           tgt_key_padding_mask=tgt_pad_mask,
+        #                           tgt_is_causal=self.encoder_is_causal,
+        #                           tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
+
+        enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    memory_key_padding_mask=src_pad_mask,
+                                    tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
 
         latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
         mu = latent_info[:, :, :self.z_dim] # (skill_seq, bs, latent_dim)
@@ -397,22 +397,22 @@ class TSkillCVAE(nn.Module):
         dec_src = self.dec_src_norm(dec_src)
         dec_src = dec_src + dec_src_pe
 
-        dec_output = self.decoder(src=dec_src,
-                                  src_key_padding_mask=None, 
-                                  src_is_causal=False,
-                                  src_mask=src_mask,
-                                  memory_key_padding_mask=None,
-                                  memory_mask=mem_mask,
-                                  memory_is_causal=False, 
-                                  tgt=dec_tgt,
-                                  tgt_key_padding_mask=tgt_pad_mask,
-                                  tgt_is_causal=self.autoregressive_decode,
-                                  tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
+        # dec_output = self.decoder(src=dec_src,
+        #                           src_key_padding_mask=None, 
+        #                           src_is_causal=False,
+        #                           src_mask=src_mask,
+        #                           memory_key_padding_mask=None,
+        #                           memory_mask=mem_mask,
+        #                           memory_is_causal=False, 
+        #                           tgt=dec_tgt,
+        #                           tgt_key_padding_mask=tgt_pad_mask,
+        #                           tgt_is_causal=self.autoregressive_decode,
+        #                           tgt_mask=tgt_mask) # (MSL|<, bs, hidden_dim)
         
-        # dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-        #                             tgt_key_padding_mask=tgt_pad_mask,
-        #                             memory_key_padding_mask=None,
-        #                             tgt_is_causal=self.autoregressive_decode)
+        dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
+                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    memory_key_padding_mask=None,
+                                    tgt_is_causal=self.autoregressive_decode)
 
         # Send project output to action dimensions
         a_joint = self.dec_action_joint_proj(dec_output) # (MSL, bs, action_dim - 1)

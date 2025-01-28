@@ -56,23 +56,23 @@ loss:
   # cont_weight: 0.000
 
 training:
-  out_dir: out/VAE/047
-  max_it: 1
+  out_dir: out/VAE/050
+  max_it: 50000
   batch_size: 6
   batch_size_val: 6
   print_every: 50
   visualize_every: 2000
   checkpoint_every: 1000
-  validate_every: 1000
-  backup_every: 1000
+  validate_every: 500
+  backup_every: 500
   model_selection_metric: act_loss
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0000
-  lr: 0.00001
-  lr_decay: 0.0
-  lr_warmup_epochs: 0
+  lr: 0.0001
+  lr_decay: 0.9995
+  lr_warmup_epochs: 2
   weight_decay: 0.0001
   gradient_accumulation: 1
-  use_precalc: False
+  use_precalc: True

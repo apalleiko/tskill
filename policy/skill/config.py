@@ -12,13 +12,6 @@ def freeze_network(network):
 
 def build_transformer(args):
 
-    # decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
-    #                                            norm_first=args["pre_norm"])
-    # decoder_norm = nn.LayerNorm(args["hidden_dim"])
-    # decoder =  nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
-    # decoder.d_model = args["hidden_dim"]
-    # return decoder
-
     return nn.Transformer(
         d_model=args["hidden_dim"],
         dropout=args["dropout"],
@@ -30,14 +23,25 @@ def build_transformer(args):
     )
 
 
+def build_decoder(args):
+    decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
+                                               norm_first=args["pre_norm"])
+    decoder_norm = nn.LayerNorm(args["hidden_dim"])
+    decoder =  nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
+    decoder.d_model = args["hidden_dim"]
+    return decoder
+
+
 def get_model(cfg, device=None):
     cfg_model = cfg["model"]
     for name in ["state_encoder", "encoder", "decoder"]:
         cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})
 
     stt_encoder = get_stt_encoder(cfg_model["state_encoder"])
-    encoder = build_transformer(cfg_model["encoder"])
-    decoder = build_transformer(cfg_model["decoder"])
+    # encoder = build_transformer(cfg_model["encoder"])
+    encoder = build_decoder(cfg_model["encoder"])
+    # decoder = build_transformer(cfg_model["decoder"])
+    decoder = build_decoder(cfg_model["decoder"])
 
     if device is None:
         is_cuda = torch.cuda.is_available()
