@@ -14,22 +14,22 @@ def freeze_network(network):
 
 def build_transformer(args):
 
-    # decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
-    #                                            norm_first=args["pre_norm"])
-    # decoder_norm = nn.LayerNorm(args["hidden_dim"])
-    # decoder = nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
-    # decoder.d_model = args["hidden_dim"]
-    # return decoder
+    decoder_layer = nn.TransformerDecoderLayer(args["hidden_dim"], args["nheads"], args["dim_feedforward"], args["dropout"],
+                                               norm_first=args["pre_norm"])
+    decoder_norm = nn.LayerNorm(args["hidden_dim"])
+    decoder = nn.TransformerDecoder(decoder_layer, args["dec_layers"], decoder_norm)
+    decoder.d_model = args["hidden_dim"]
+    return decoder
 
-    return nn.Transformer(
-        d_model=args["hidden_dim"],
-        dropout=args["dropout"],
-        nhead=args["nheads"],
-        dim_feedforward=args["dim_feedforward"],
-        num_encoder_layers=args["enc_layers"],
-        num_decoder_layers=args["dec_layers"],
-        norm_first=args["pre_norm"],
-    )
+    # return nn.Transformer(
+    #     d_model=args["hidden_dim"],
+    #     dropout=args["dropout"],
+    #     nhead=args["nheads"],
+    #     dim_feedforward=args["dim_feedforward"],
+    #     num_encoder_layers=args["enc_layers"],
+    #     num_decoder_layers=args["dec_layers"],
+    #     norm_first=args["pre_norm"],
+    # )
 
 
 def get_model(cfg, device=None):
@@ -43,9 +43,9 @@ def get_model(cfg, device=None):
     train_vae = cfg["training"].get("train_vae",False)
     cond_plan = cfg_model.get("conditional_plan",False)
     goal_mode = cfg_model.get("goal_mode","image")
+    obs_history = cfg_model.get("obs_history",2)
 
     transformer = build_transformer(cfg_model)
-
 
     if cfg.get("vae_cfg",None) is None:
         vae_cfg = config.load_config(os.path.join(cfg_model["vae_path"],"config.yaml"))
@@ -71,6 +71,7 @@ def get_model(cfg, device=None):
         vae,
         cond_plan,
         goal_mode,
+        obs_history,
         stt_encoder,
         device=device
     )

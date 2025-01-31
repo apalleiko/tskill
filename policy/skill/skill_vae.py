@@ -1,6 +1,7 @@
 import time
 import torch
 from torch import nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 
@@ -8,10 +9,23 @@ import dill as pickle
 from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks
 
 
-def reparametrize(mu, logvar):
-    std = (0.5 * logvar).exp()
-    eps = torch.randn_like(std)
-    return mu + std * eps
+class STEFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input):
+        return torch.round(input).float()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output
+    
+
+class StraightThroughEstimator(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+            x = STEFunction.apply(x)
+            return x
 
 
 def get_sinusoid_encoding_table(n_position, d_hid):
@@ -25,13 +39,81 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
 
 
+class Quantization(nn.Module):
+    def __init__(self, alpha, device, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.alpha = alpha
+        self.z_dim = self.alpha.shape[0]
+        self._device = device
+        self.round_ste = StraightThroughEstimator()
+
+        self.skill_dict = dict()
+        self.reverse_skill_dict = dict()
+        indices = torch.ones(tuple(self.alpha.to(torch.int).tolist())).nonzero().to(self._device)
+        for i in range(indices.shape[0]):
+            skill = torch.floor(indices[i] - torch.floor(self.alpha / 2))
+            self.skill_dict[tuple(skill.tolist())] = i
+            self.reverse_skill_dict[i] = skill
+
+    def forward(self, x):
+        z = torch.floor(self.alpha / 2) * torch.tanh(x)
+        z = self.round_ste(z)
+        return z
+
+    def indices_to_codes(self, indices):
+        """Turn a tensor of indices (bs, seq) into a tensor of codes (bs, seq, z_dim)"""
+        z = torch.zeros(indices.shape[0],indices.shape[1],self.z_dim, device=self._device)
+        for i in range(indices.shape[0]):
+            for j in range(indices.shape[1]):
+                z[i,j,:] = self.reverse_skill_dict[indices[i,j].item()]
+        return z
+
+    def codes_to_indices(self, codes):
+        """Turn a tensor of codes (bs, seq, z_dim) into a tensor of codes (bs, seq)"""
+        indices = torch.zeros(codes.shape[0],codes.shape[1], device=self._device)
+        for i in range(indices.shape[0]):
+            for j in range(indices.shape[1]):
+                indices[i,j] = self.skill_dict[tuple(codes[i,j,:].tolist())]
+        return indices
+
+    def top_k_sampling(self, logits, k=5, temperature=1.0):
+        # Apply temperature scaling
+        scaled_logits = logits / temperature
+        # Find the top k values and indices
+        top_values, top_indices = torch.topk(scaled_logits, k, dim=-1)
+        # Compute probabilities from top values
+        top_probs = torch.softmax(top_values, dim=-1)
+        # Sample token index from the filtered probabilities
+        sampled_indices = torch.zeros(top_probs.shape[0], top_probs.shape[1], 1, device=self._device)
+        for i in range(top_probs.shape[0]):
+            sampled_indices[i,:,:] = torch.multinomial(top_probs[i,:,:], num_samples=1, replacement=True)
+        sampled_indices = sampled_indices.to(torch.int64)
+        # Map the sampled index back to the original logits tensor
+        original_indices = top_indices.gather(-1, sampled_indices)
+        return original_indices
+    
+    def top_k(self, logits, k=5, temperature=1.0):
+        # Apply temperature scaling
+        scaled_logits = logits / temperature
+        # Find the top k values and indices
+        top_values, top_indices = torch.topk(scaled_logits, k, dim=-1)
+        # Compute probabilities from top values
+        top_probs = torch.softmax(top_values, dim=-1)
+        # Get deterministic max value
+        sampled_indices = torch.max(top_probs, dim=-1)
+        # Map the sampled index back to the original logits tensor
+        original_indices = top_indices.gather(-1, sampled_indices)
+        return original_indices
+
+
 class TSkillCVAE(nn.Module):
     """ Transformer Skill CVAE Module for encoding/decoding skill sequences"""
     def __init__(self, stt_encoder, 
                  encoder, decoder, 
                  state_dim, action_dim,
-                 max_skill_len, z_dim,
+                 max_skill_len, alpha,
                  autoregressive_decode,
+                 decoder_obs,
                  encode_state,
                  encoder_is_causal,
                  device, **kwargs):
@@ -52,26 +134,30 @@ class TSkillCVAE(nn.Module):
         """
         super().__init__()
         ### General args
+        self._device = device
         self.decoder = decoder
         self.encoder = encoder
         self.hidden_dim = decoder.d_model
-        self.z_dim = z_dim
+        self.alpha = torch.tensor(alpha).to(self._device, torch.float)
+        self.num_skills = torch.prod(self.alpha).to(self._device, torch.int).item()
+        self.z_dim = self.alpha.shape[0]
         self.max_skill_len = max_skill_len
-        self._device = device
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.norm = nn.LayerNorm
+        self.decoder_obs = decoder_obs
         self.autoregressive_decode = autoregressive_decode
         self.encode_state = encode_state
         self.encoder_is_causal = encoder_is_causal
+
+        self.vq = Quantization(self.alpha, device)
 
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
         # Create pe scaling factors
         self.enc_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
         self.enc_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
-        self.dec_src_qpos_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
-        self.dec_src_img_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
+        self.dec_src_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.dec_tgt_pos_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
         self.img_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.001)
 
@@ -95,7 +181,7 @@ class TSkillCVAE(nn.Module):
         self.enc_tgt_norm = self.norm(self.hidden_dim)
 
         ### Latent
-        self.enc_z = nn.Linear(self.hidden_dim, self.z_dim*2) # project hidden -> latent [std; var]
+        self.enc_z = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent [std; var]
         self.dec_z = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
 
         ### Decoder
@@ -154,14 +240,14 @@ class TSkillCVAE(nn.Module):
             enc_src_mask, enc_mem_mask = enc_tgt_mask = None
         # Decoder ar masks
         if self.autoregressive_decode:
-            dec_tgt_mask = get_dec_ar_masks(self.max_skill_len, device=self._device)
+            dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(MNS, self.max_skill_len, self.decoder_obs, device=self._device)
         else:
-            dec_tgt_mask = None
+            dec_mem_mask = dec_tgt_mask = None
 
         ### Encode inputs to latent
-        mu, logvar, z = self.forward_encode(qpos, actions, (img_src, img_pe), 
-                                            seq_pad_mask, skill_pad_mask, 
-                                            enc_src_mask, enc_mem_mask, enc_tgt_mask) # (skill_seq, bs, latent_dim)
+        z = self.forward_encode(qpos, actions, (img_src, img_pe),
+                                seq_pad_mask, skill_pad_mask,
+                                enc_src_mask, enc_mem_mask, enc_tgt_mask) # (skill_seq, bs, latent_dim)
         
         # Check for NaNs
         if torch.any(torch.isnan(z)):
@@ -170,10 +256,10 @@ class TSkillCVAE(nn.Module):
             raise ValueError(f"NaNs encountered during encoding! Data saved to ERROR_DATA.pickle")
         
         ### Decode skill sequence
-        a_hat = self.sequence_decode(z, actions,
-                                     seq_pad_mask, skill_pad_mask,
-                                     dec_tgt_mask)
-
+        a_hat = self.skill_decode(z, 
+                                  seq_pad_mask, skill_pad_mask,
+                                  dec_mem_mask, dec_tgt_mask)
+    
         # Check for NaNs
         if torch.any(torch.isnan(a_hat)):
             with open("ERROR_DATA.pickle",'+wb') as f:
@@ -182,10 +268,9 @@ class TSkillCVAE(nn.Module):
 
         # Reorder outputs to match inputs
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
-        mu = mu.permute(1,0,2) # (bs, seq, latent_dim)
-        logvar = logvar.permute(1,0,2) # (bs, seq, latent_dim)
+        z = z.permute(1,0,2) # (bs, seq, z_dim)
 
-        return dict(a_hat=a_hat, mu=mu, logvar=logvar, latent=z)
+        return dict(a_hat=a_hat, z=z)
         
 
     def forward_encode(self, qpos, actions, img_info, 
@@ -196,11 +281,6 @@ class TSkillCVAE(nn.Module):
         BS, SEQ, _ = qpos.shape # Use bs for masking
         NUM_CAM = img_feat.shape[2]
         MNS = tgt_pad_mask.shape[1]
-
-        # Get a batch mask for eliminating fully padded inputs during training
-        batch_mask = torch.all(src_pad_mask, dim=1) 
-        if torch.any(batch_mask) > 0:
-            print("Encountered fully padded encoder input!")
 
         ### Obtain latent z from state, action, image sequence
         enc_type_embed = self.input_embed.weight * self.input_embed_scale_factor
@@ -233,8 +313,7 @@ class TSkillCVAE(nn.Module):
             # encoder src
             enc_src = torch.cat([qpos_src, action_src, img_src], axis=0) # ((2+num_cam)*seq, bs, hidden_dim)
             # obtain seq position embedding for input
-            enc_src_pe = self.get_pos_table(SEQ) * self.enc_src_pos_scale_factor
-            enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, 1, hidden_dim)
+            enc_src_pe = self.get_pos_table(SEQ).permute(1, 0, 2) * self.enc_src_pos_scale_factor # (seq, 1, hidden_dim)
             enc_src_pe = enc_src_pe.repeat((2+NUM_CAM), BS, 1)  # ((2+num_cam)*seq, bs, hidden_dim)
             enc_src = self.enc_src_norm(enc_src)
             enc_src = enc_src + enc_src_pe
@@ -242,22 +321,19 @@ class TSkillCVAE(nn.Module):
             # Repeat same padding mask for new seq length (same pattern)
             src_pad_mask = src_pad_mask.repeat(1,(2+NUM_CAM)) # (bs, (2+num_cam)*seq)
             if src_mask is not None:
-                src_mask = src_mask.repeat((2+NUM_CAM), (2+NUM_CAM)) # (bs*nhead, (2+num_cam)*seq, (2+num_cam)*seq)
+                src_mask = src_mask.repeat((2+NUM_CAM), (2+NUM_CAM)) # ((2+num_cam)*seq, (2+num_cam)*seq)
             if mem_mask is not None:
                 mem_mask = mem_mask.repeat(1, (2+NUM_CAM)) # (skill_seq, (2+num_cam)*seq)
         else:
             enc_src = action_src # (seq, bs, hidden_dim)
             # obtain seq position embedding for input
-            enc_src_pe = self.get_pos_table(SEQ) * self.enc_src_pos_scale_factor
-            # Alternative action seq embedding
-            # enc_src_pe = (self.get_pos_table(self.max_skill_len)).repeat(BS, MNS, 1) * self.enc_src_pos_scale_factor
-            enc_src_pe = enc_src_pe.permute(1, 0, 2)  # (seq, bs, hidden_dim)
+            enc_src_pe = self.get_pos_table(SEQ).permute(1, 0, 2) * self.enc_src_pos_scale_factor # (seq, bs, hidden_dim)
             enc_src = self.enc_src_norm(enc_src)
             enc_src = enc_src + enc_src_pe
 
         # encoder tgt
-        enc_tgt = torch.zeros(MNS, BS, self.hidden_dim).to(self._device) # (skill_seq, bs, hidden_dim)
-        enc_tgt_pe = self.get_pos_table(MNS).permute(1, 0, 2).repeat(1, BS, 1) * self.enc_tgt_pos_scale_factor
+        enc_tgt = torch.zeros(MNS, BS, self.hidden_dim).to(self._device) 
+        enc_tgt_pe = self.get_pos_table(MNS).permute(1, 0, 2).repeat(1, BS, 1) * self.enc_tgt_pos_scale_factor # (skill_seq, bs, hidden_dim)
         enc_tgt = self.enc_tgt_norm(enc_tgt)
         enc_tgt = enc_tgt + enc_tgt_pe
 
@@ -277,125 +353,56 @@ class TSkillCVAE(nn.Module):
         enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
                                     tgt_key_padding_mask=tgt_pad_mask,
                                     memory_key_padding_mask=src_pad_mask,
-                                    tgt_is_causal=self.encoder_is_causal, memory_is_causal=self.encoder_is_causal) # (skill_seq, bs, hidden_dim)
+                                    tgt_is_causal=False, memory_is_causal=False) # (skill_seq, bs, hidden_dim)
 
-        latent_info = self.enc_z(enc_output) # (skill_seq, bs, 2*latent_dim)
-        mu = latent_info[:, :, :self.z_dim] # (skill_seq, bs, latent_dim)
-        logvar = latent_info[:, :, self.z_dim:] # (skill_seq, bs, latent_dim)
-        latent_sample = reparametrize(mu, logvar) # (skill_seq, bs, latent_dim)
-        
-        return mu, logvar, latent_sample
+        e = self.enc_z(enc_output)
+        z = self.vq(e)
 
-    def sequence_decode(self, z, actions,
-                        seq_pad_mask, skill_pad_mask,
-                        tgt_mask):
-        """
-        Decode a sequence of skills into actions given a demo trajectory. Only used
-        during training.
-        args:
-            z: (skill_seq, bs, latent_dim)
-            actions: (bs, seq, act_dim)
-            seq_pad_mask: (bs, seq)
-            skill_pad_mask: (bs, skill_seq)
-            tgt_mask: (bs, MSL, MSL)
-        returns:
-            a_hat: (seq, bs, act_dim)
-        """
-        bs = seq_pad_mask.shape[0]
-
-        ### Decode skills one at a time
-        a_hat = torch.zeros(0, bs, self.action_dim, device=self._device) # (0, bs, act_dim)
-        for sk in range(z.shape[0]):
-            # Get current time step and skill
-            t = sk*self.max_skill_len
-            tf = (sk+1)*self.max_skill_len
-            sk_z = z[sk:sk + 1, :, :].transpose(0,1) # (bs, 1, latent_dim)
-            sk_skill_pad_mask = skill_pad_mask[:, sk:sk+1]
-            sk_seq_pad_mask = seq_pad_mask[:, t:tf]
-
-            # Get target actions for autoregressive decoding
-            if self.autoregressive_decode:
-                # Always set first input as zeros, as "start" token, and shift other tgt actions right
-                tgt_0 = self.dec_tgt_start_token.repeat(bs, 1, 1) # (bs, 1, act_dim)
-                tgt = torch.cat((tgt_0, actions[:,t:tf-1,:]), dim=1) # (bs, MSL, act_dim)
-            else:
-                tgt = None
-                if (sk_unpad := sk_seq_pad_mask.shape[1]) < self.max_skill_len: # Handle case where input is < MSL during training
-                    sk_seq_pad_mask = torch.hstack((sk_seq_pad_mask, torch.ones(bs, self.max_skill_len - sk_unpad)))
-
-            # Decode current skill with conditional info
-            a_pred = self.skill_decode(sk_z,
-                                       sk_skill_pad_mask, sk_seq_pad_mask, 
-                                       tgt_mask, tgt) # (MSL, bs, act_dim)
-            
-            a_hat = torch.vstack((a_hat, a_pred))
-        
-        return a_hat
+        return z
 
     def skill_decode(self, z,
                      src_pad_mask, tgt_pad_mask,
-                     tgt_mask=None, tgt=None):
+                     mem_mask=None, tgt_mask=None):
         """
         Decode an individual skill into actions, possibly based on current 
         image and state depending on self.conditional_decode
         args: 
-            z: (bs, 1, latent_dim)
-            src_pad_mask: (bs, 1)
+            z: (bs, skill_seq, latent_dim)
+            src_pad_mask: (bs, skill_seq)
             tgt_pad_mask: (bs, MSL|<)
-            tgt_mask: (bs, MSL|<, MSL|<)
-            tgt: (bs, MSL|<, act_dim)
+            mem_mask: (skill_seq*MSL, skill_seq)
+            tgt_mask: (MSL|<, MSL|<)
         returns:
-            a_hat: (MSL|<, bs, act_dim)
+            a_hat: (MSL*skill_seq, bs, act_dim)
         """
+
         ### Move inputs to device (needed for evaluation)
-        if tgt is not None:
-            tgt = tgt.to(self._device)
+        if mem_mask is not None:
+            mem_mask = mem_mask.to(self._device)
         if tgt_mask is not None:
             tgt_mask = tgt_mask.to(self._device)
 
-        if not self.autoregressive_decode:
-            src_pad_mask = src_pad_mask.to(self._device)
-            tgt_pad_mask = tgt_pad_mask.to(self._device)
-            # Get a batch mask for handling fully padded inputs during training
-            batch_mask = torch.all(src_pad_mask, dim=1)
-            if torch.all(batch_mask): # Unmask if encounter fully padded inputs, which could happen during training.
-                return torch.zeros(self.max_skill_len, bs, self.action_dim, device=self._device)
-        else:
-            src_pad_mask = None # padded items ignored downstream
-            tgt_pad_mask = None # padded items ignored downstream
-
-        bs = z.shape[0]
-
-        # obtain learned postition embedding for z, state, & img inputs
-        dec_type_embed = self.input_embed.weight * self.input_embed_scale_factor
-        dec_type_embed = dec_type_embed.unsqueeze(1).repeat(1, bs, 1) # (4, bs, hidden_dim)
+        num_z, bs,_ = z.shape
 
         # skills
-        z_src = self.dec_z(z.transpose(0,1)) # (1, bs, hidden_dim)
-        z_src = self.dec_input_z_norm(z_src) # (1, bs, hidden_dim)
-        z_pe = torch.zeros_like(z_src) # no pe, only one skill per decoding step
+        z_src = self.dec_z(z) # (num_z, bs, hidden_dim)
+        z_src = self.dec_input_z_norm(z_src) # (num_z, bs, hidden_dim)
+        z_pe = self.get_pos_table(num_z).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_src_pos_scale_factor # (num_z, bs, hidden_dim)
 
-        # tgt
-        if self.autoregressive_decode:
-            dec_tgt = self.enc_action_proj(tgt).permute(1,0,2) # (MSL|<, bs, hidden_dim)
-            dec_tgt = torch.zeros_like(dec_tgt, device=self._device) # (MSL|<, bs, hidden_dim)
-
-            dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
-            # dec_tgt_pe = torch.zeros_like(dec_tgt)
-        else:
-            dec_tgt_pe = self.get_pos_table(self.max_skill_len).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL, bs, hidden_dim)
-            dec_tgt  = torch.zeros_like(dec_tgt_pe) # (MSL, bs, hidden_dim)
-            tgt_pad_mask[batch_mask, :] = False # Unmask fully padded tgts to avoid NaNs
+        dec_tgt = torch.zeros(self.max_skill_len*num_z, bs, self.hidden_dim, device=self._device) # (MSL*num_z, bs, hidden_dim)
+        dec_tgt_pe = self.get_pos_table(dec_tgt.shape[0]).permute(1, 0, 2).repeat(1, bs, 1) * self.dec_tgt_pos_scale_factor # (MSL|<, bs, hidden_dim)
         dec_tgt = self.dec_tgt_norm(dec_tgt)
         dec_tgt = dec_tgt + dec_tgt_pe
 
         dec_src = z_src # (z, bs, hidden)
         dec_src_pe = z_pe
-        mem_mask = None
-        src_mask = None
-
         dec_src = self.dec_src_norm(dec_src)
         dec_src = dec_src + dec_src_pe
+
+        src_mask = None
+        if self.autoregressive_decode:
+            src_pad_mask = None
+            tgt_pad_mask = None
 
         # dec_output = self.decoder(src=dec_src,
         #                           src_key_padding_mask=None, 
@@ -411,7 +418,7 @@ class TSkillCVAE(nn.Module):
         
         dec_output = self.decoder(dec_tgt, dec_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
                                     tgt_key_padding_mask=tgt_pad_mask,
-                                    memory_key_padding_mask=None,
+                                    memory_key_padding_mask=src_pad_mask,
                                     tgt_is_causal=self.autoregressive_decode)
 
         # Send project output to action dimensions
@@ -421,47 +428,27 @@ class TSkillCVAE(nn.Module):
 
         return a_hat
     
-    def get_action(self, data, t):
+    def get_action(self, data):
         # Define current info
-        t_act = t % self.max_skill_len
-        dec_skill_pad_mask = torch.zeros(1,1)
-        latent = data["latent"] # (bs, 1, z_dim)
-        bs = latent.shape[0]
+        latent = data["latent"] # (bs, num_z, z_dim)
+        bs, num_z, _ = latent.shape
+        skill_pad_mask = torch.zeros(bs,num_z)
+        seq_pad_mask = torch.zeros(bs,num_z*self.max_skill_len)
 
         if self.autoregressive_decode:
-            if t_act == 0: # Decode new sequence
-                self.execution_data = dict()
-                self.execution_data["dec_tgt"] = self.dec_tgt_start_token.repeat(bs,1,1) # (bs, 1, act_dim)
-
-            dec_tgt = self.execution_data["dec_tgt"]
-
-            num_actions = dec_tgt.shape[1]
-            dec_tgt_mask = get_dec_ar_masks(num_actions)
-            seq_pad_mask = torch.zeros(1,num_actions) # (bs, MSL|<)
-
-            with torch.no_grad():
-                a_pred = self.skill_decode(latent,
-                                           dec_skill_pad_mask, seq_pad_mask,
-                                           dec_tgt_mask, tgt=dec_tgt) # (MSL|<, bs, action_dim)
-            
-            # print("Model a_tgt: ", self.execution_data["dec_tgt"])
-            # print("Model a_hat: ", a_pred)
-
-            self.execution_data["dec_tgt"] = torch.cat((dec_tgt, a_pred[-1:,...].permute(1,0,2)), dim=1) # (1, seq + 1, act_dim)
-            a_t = a_pred.detach()[-1,...] # Take most recent action
+            dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_z, self.max_skill_len, self.decoder_obs)
         else:
-            if t_act == 0:
-                seq_pad_mask = torch.zeros(1,self.max_skill_len)
-                with torch.no_grad():
-                    a_hat = self.skill_decode(latent, 
-                                            dec_skill_pad_mask, seq_pad_mask, 
-                                            None, None) # (MSL, bs, action_dim)
-                self.execution_data = dict()
-                self.execution_data["a_hat"] = a_hat.detach() 
-                
-            a_t = self.execution_data["a_hat"][t_act,...]
+            dec_mem_mask, dec_tgt_mask = None
 
-        return a_t
+        z = latent.transpose(0,1)
+        with torch.no_grad():
+            a_hat = self.skill_decode(z, 
+                                      skill_pad_mask, seq_pad_mask,
+                                      dec_mem_mask, dec_tgt_mask) # (MSL, bs, action_dim)
+        self.execution_data = dict()
+        self.execution_data["a_hat"] = a_hat.detach()
+
+        return a_hat
 
 
     def to(self, device):

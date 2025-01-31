@@ -12,9 +12,10 @@ import numpy as np
 import copy
 
 from mani_skill2.utils.io_utils import load_json
-from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data, pad2size, efficient_collate_fn
+from policy.dataset.data_utils import ScalingFunction, DataAugmentation, load_h5_data, pad2size, efficient_collate_fn, get_task_embs
 from policy.dataset.ms2dataset import ManiSkillrgbSeqDataset, convert_observation as convert_obs_ms
 from policy.dataset.LIBEROdataset import LiberoDataset, convert_observation as convert_obs_libero
+from LIBERO.libero.libero.benchmark import get_benchmark
 from policy.dataset.multitask_dataset import MultitaskDataset
 
 
@@ -194,7 +195,7 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                     elif mode == "libero":
                         trajectory = episodes[f"demo_{idx}"]
                         trajectory = load_h5_data(trajectory)
-                        obs = convert_obs_libero(trajectory["obs"])
+                        obs = convert_obs_libero(trajectory)
 
                     actions = torch.from_numpy(trajectory["actions"]).float()
                     seq_size = actions.shape[0]
@@ -366,21 +367,30 @@ def multitask_dataset_loader(dataset_list, cfg, **kwargs):
         recompute_scaling = False
     else:
         print("Updating new multitask train & val datasets")
+        benchmark = get_benchmark("LIBERO_90")(0)
         data_info["datasets"] = dict()
         for i in range(len(dataset_list)):
             d_file_i = dataset_list[i]
             assert osp.exists(d_file_i)
             print(f"Loading dataset: {d_file_i}")
+            demo_name = d_file_i.split('/')[-1].split('.')[0][:-5]
+            task = [t for t in benchmark.tasks if t.name == demo_name][0]
             cfg_i = copy.deepcopy(cfg)
             cfg_i["data"]["dataset"] = d_file_i
             cfg_i["data"]["pad"] = False # Pad in collate fcn
             train_i, val_i, data_info_i = dataset_loader(cfg_i, multitask=True, **kwargs)
-            # Create one hot task vector
-            task_vec = torch.zeros(len(dataset_list))
-            task_vec[i] = 1
-            data_info_i["task_vec"] = task_vec
-            if goal_mode is not None and goal_mode != "image":
+            if goal_mode is not None:
+                if goal_mode == "one-hot":
+                    # Create one hot task vector
+                    task_vec = torch.zeros(len(dataset_list))
+                    task_vec[i] = 1
+                elif goal_mode in ("bert", "gpt2", "clip", "roberta"):
+                    description = [task.language]
+                    task_vec = get_task_embs(goal_mode, description).squeeze(0)
+                else:
+                    raise ValueError(f"goal mode: {goal_mode} not recognized")
                 print(f"Manually assigning task vec for goal mode: {goal_mode}")
+                data_info_i["task_vec"] = task_vec
                 train_i.goal_mode = task_vec
                 val_i.goal_mode = task_vec
             data_info["datasets"][d_file_i] = data_info_i

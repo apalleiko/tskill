@@ -105,7 +105,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # e.g., experiments/LIBERO_SPATIAL/Multitask/BCRNNPolicy_seed100/
 
     cfg_path = os.path.join(args.model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
@@ -250,11 +249,11 @@ def main():
                 img_obs = []
 
                 print("\nDoing model forward pass...")
-                if not args.vae and not args.full_seq and method == "plan":
-                    print("Resetting Initial Data!!")
-                    data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
-                    data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
-                    data["state"][0,0,:] = cd["state"]
+                # if not args.vae and not args.full_seq and method == "plan":
+                #     print("Resetting Initial Data!!")
+                #     data["rgb"][0,0,0,...] = cd["rgb"][0,0,0,...]
+                #     data["rgb"][0,0,1,...] = cd["rgb"][0,0,1,...]
+                #     data["state"][0,0,:] = cd["state"]
                 
                 out = model(data, use_precalc=task_dataset.use_precalc)
                 # planned_actions = dataset.action_scaling(out["a_hat"][0,...],"inverse").numpy()
@@ -268,7 +267,8 @@ def main():
                     # colors = ['r','b','g','k','gray','salmon','sienna','lightblue','turquoise']
                     # for d in range(vae.action_dim):
                     #     ax.plot(data["actions"][0,:,d],colors[d],linestyle="dashed")
-                    #     ax.plot(out["a_hat"][0,:,d],colors[d])
+                    #     ax.plot(out["vae_out"]["a_hat"][0,:,d],colors[d])
+                    #     ax.plot(out["a_hat"][0,:,d],colors[d],linestyle="dotted")
                     # plt.show()
 
                     if args.vae and method == "plan":
@@ -397,21 +397,17 @@ def main():
                         current_data = task_dataset.from_obs(obs)
 
                         if not use_vae:
-                            if True or model.goal_mode == "image":
+                            if model.goal_mode == "image":
                                 if "goal_feat" in data.keys():
                                     current_data["goal_feat"] = data["goal_feat"]
                                     current_data["goal_pe"] = data["goal_pe"]
                                 else:
                                     current_data["goal"] = data["goal"]
-                            elif model.goal_mode == "one-hot":
-                                pass
-                            else:
-                                raise ValueError
                         else:
                             if steps == data["actions"].shape[1]:
                                 break
                             skill_num = steps // model.max_skill_len
-                            current_data["latent"] = out["mu"][:,skill_num:skill_num+1,:]
+                            current_data["latent"] = out["z"][:,skill_num:skill_num+1,:]
 
                         actions = model.get_action(current_data, steps)
                         acts = torch.cat((acts, actions), dim=0)
@@ -476,6 +472,8 @@ def main():
                         ### VIEW INTERMEDIATE VALUES
                         # num_skills = (steps // model.max_skill_len) + 1
                         # t_act = steps % model.max_skill_len
+                        # if t_act == 0:
+                        #     input("waiting")
                         # print(f"==>> t_act: {t_act}")
                         # act_seq_start = model.max_skill_len * (num_skills-1)
                         # print(f"==>> act_seq_start: {act_seq_start}")

@@ -116,13 +116,14 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 2
+        cfg["training"]["batch_size"] = 1
+        cfg["training"]["batch_size_val"] = 12
         cfg["training"]["batch_size_alt"] = 0
-        cfg["training"]["visualize_every"] = 100
+        cfg["training"]["visualize_every"] = 1
         cfg["training"]["print_every"] = 1
-        cfg["training"]["backup_every"] = 11
-        cfg["training"]["validate_every"] = 1
-        cfg["training"]["checkpoint_every"] = 11
+        cfg["training"]["backup_every"] = 1000
+        cfg["training"]["validate_every"] = 1000
+        cfg["training"]["checkpoint_every"] = 1000
         cfg["training"]["max_it"] = 1
 
     # Shorthands
@@ -330,6 +331,8 @@ def main(args):
                     if param.grad is not None:
                         writer.add_histogram(f'{name}', param, epoch_it)
                         writer.add_histogram(f'{name}.grad', param.grad, epoch_it)
+                        # if "goal_proj" in name or "image_proj" in name or "state_proj" in name:
+                        #     print(name, param.grad)
                 for k,v in batch_metrics.items():
                     if "traj" in k:
                         _,seq,_ = v.shape

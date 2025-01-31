@@ -5,6 +5,8 @@ from torchvision.transforms import v2
 import h5py
 from policy.dataset.masking_utils import get_skill_pad_from_seq_pad
 import numpy as np
+from transformers import AutoModel, AutoTokenizer, logging
+from hydra.utils import to_absolute_path
 
 # loads h5 data into memory for faster access
 def load_h5_data(data):
@@ -196,4 +198,67 @@ class DataAugmentation:
             data["rgb"][m,...] = ra(data["rgb"][m,...]).clamp(0,1)
 
         return data
+    
+
+def get_task_embs(task_embedding_format, descriptions):
+    logging.set_verbosity_error()
+    if task_embedding_format == "bert":
+        tz = AutoTokenizer.from_pretrained(
+            "bert-base-cased", cache_dir=to_absolute_path("./bert")
+        )
+        model = AutoModel.from_pretrained(
+            "bert-base-cased", cache_dir=to_absolute_path("./bert")
+        )
+        tokens = tz(
+            text=descriptions,  # the sentence to be encoded
+            add_special_tokens=True,  # Add [CLS] and [SEP]
+            max_length=25,  # maximum length of a sentence
+            padding="max_length",
+            return_attention_mask=True,  # Generate the attention mask
+            return_tensors="pt",  # ask the function to return PyTorch tensors
+        )
+        masks = tokens["attention_mask"]
+        input_ids = tokens["input_ids"]
+        task_embs = model(tokens["input_ids"], tokens["attention_mask"])[
+            "pooler_output"
+        ].detach()
+    elif task_embedding_format == "gpt2":
+        tz = AutoTokenizer.from_pretrained("gpt2")
+        tz.pad_token = tz.eos_token
+        model = AutoModel.from_pretrained("gpt2")
+        tokens = tz(
+            text=descriptions,  # the sentence to be encoded
+            add_special_tokens=True,  # Add [CLS] and [SEP]
+            max_length=25,  # maximum length of a sentence
+            padding="max_length",
+            return_attention_mask=True,  # Generate the attention mask
+            return_tensors="pt",  # ask the function to return PyTorch tensors
+        )
+        task_embs = model(**tokens)["last_hidden_state"].detach()[:, -1]
+    elif task_embedding_format == "clip":
+        tz = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch32", clean_up_tokenization_spaces=True)
+        model = AutoModel.from_pretrained("openai/clip-vit-base-patch32")
+        tokens = tz(
+            text=descriptions,  # the sentence to be encoded
+            add_special_tokens=True,  # Add [CLS] and [SEP]
+            max_length=25,  # maximum length of a sentence
+            padding="max_length",
+            return_attention_mask=True,  # Generate the attention mask
+            return_tensors="pt",  # ask the function to return PyTorch tensors
+        )
+        task_embs = model.get_text_features(**tokens).detach()
+    elif task_embedding_format == "roberta":
+        tz = AutoTokenizer.from_pretrained("roberta-base")
+        tz.pad_token = tz.eos_token
+        model = AutoModel.from_pretrained("roberta-base")
+        tokens = tz(
+            text=descriptions,  # the sentence to be encoded
+            add_special_tokens=True,  # Add [CLS] and [SEP]
+            max_length=25,  # maximum length of a sentence
+            padding="max_length",
+            return_attention_mask=True,  # Generate the attention mask
+            return_tensors="pt",  # ask the function to return PyTorch tensors
+        )
+        task_embs = model(**tokens)["pooler_output"].detach()
+    return task_embs
     
