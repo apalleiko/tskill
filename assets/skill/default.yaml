@@ -25,11 +25,10 @@ model:
   alpha: [7,5,5,5]
   hidden_dim: 256
   max_skill_len: 8
+  encoder_obs: 4
   decoder_obs: 4
-  autoregressive_decode: True
-  encode_state: True
-  encoder_is_causal: True
-  
+  goal_mode: one-hot
+
   encoder:
     dropout : 0.1
     nheads : 8
@@ -52,7 +51,7 @@ model:
     position_embedding: sine
 
 training:
-  out_dir: out/VAE/055
+  out_dir: out/VAE/056
   max_it: 50000
   batch_size: 12
   batch_size_val: 6

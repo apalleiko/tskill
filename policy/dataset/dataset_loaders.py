@@ -35,14 +35,9 @@ def dataset_loader(cfg, **kwargs) -> None:
 
 def singletask_dataset_loader(cfg, **kwargs) -> None:
         method = cfg["method"]
-        if method == "plan":
-            cfg_model_vae = cfg["vae_cfg"]["model"]
-            cfg_vae = cfg["vae_cfg"]
-            goal_mode = cfg["model"].get("goal_mode","image")
-        else:
-            cfg_model_vae = cfg["model"]
-            cfg_vae = cfg
-            goal_mode = None
+        cfg_vae = cfg
+        goal_mode = cfg["model"].get("goal_mode","image")
+        cfg_model_vae = cfg["model"]
         cfg_data = cfg["data"]
         mode = cfg_data.get("mode","maniskill")
         dataset_file: str = cfg_data["dataset"]
@@ -52,8 +47,6 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
         pad: bool = cfg_data.get("pad", False) # For specific cases to pad to a specific length. Otherwise is padded in collate function.
         count: int = cfg_data.get("max_count", 0) # Dataset count limitations
         max_skill_len: int = cfg_model_vae["max_skill_len"] # Max skill length
-        autoregressive_decode: bool = cfg_model_vae["autoregressive_decode"] # Whether decoding autoregressively
-        encoder_is_causal: bool = cfg_model_vae.get("encoder_is_causal",True) # Whether encoder has causal masks applied
         full_seq: bool = cfg_data.get("full_seq") # Whether to use a mapping for the episodes to start at each timestep
         full_seq_val = cfg_data.get("full_seq_val",full_seq)
         max_seq_len = cfg_data.get("max_seq_len", 0)
@@ -278,14 +271,14 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
                             max_seq_len, max_skill_len,
                             pad, train_augmentation,
                             act_scaling, stt_scaling,
-                            full_seq, autoregressive_decode, encoder_is_causal,
+                            full_seq,
                             goal_mode, add_batch_dim=add_batch_dim,
                             pad2msl=pad2msl_train, use_precalc=use_precalc)
         val_dataset = ds(method, dataset_file, val_mapping, 
                             max_seq_len, max_skill_len,
                             pad, None,
                             act_scaling, stt_scaling,
-                            full_seq_val, autoregressive_decode, encoder_is_causal,
+                            full_seq_val,
                             goal_mode, add_batch_dim=add_batch_dim,
                             pad2msl=pad2msl_val, use_precalc=use_precalc)
 
@@ -311,13 +304,8 @@ def singletask_dataset_loader(cfg, **kwargs) -> None:
 
 
 def multitask_dataset_loader(dataset_list, cfg, **kwargs):
-    method = cfg["method"]
-    if method == "plan":
-        cfg_vae = cfg["vae_cfg"]
-        goal_mode = cfg["model"].get("goal_mode","image")
-    else:
-        cfg_vae = cfg
-        goal_mode = None
+    goal_mode = cfg["model"].get("goal_mode","image")
+    cfg_vae = cfg
     cfg_data = cfg["data"]
     mode = cfg_data.get("mode","maniskill")
     batch_size = cfg["training"]["batch_size"]

@@ -52,9 +52,7 @@ def get_model(cfg, device=None):
         print("freezing state encoder network!")
         freeze_network(stt_encoder)
 
-    ar_dec = cfg_model.get("autoregressive_decode",False)
-    encode_state = cfg_model.get("encode_state",True)
-    encoder_is_causal = cfg_model.get("encoder_is_causal",False)
+    goal_mode = cfg_model.get("goal_mode","image")
 
     model = TSkillCVAE(
         stt_encoder,
@@ -64,10 +62,9 @@ def get_model(cfg, device=None):
         action_dim=cfg_model["action_dim"],
         max_skill_len=cfg_model["max_skill_len"],
         alpha=cfg_model["alpha"],
+        encoder_obs=cfg_model["encoder_obs"],
         decoder_obs=cfg_model["decoder_obs"],
-        autoregressive_decode=ar_dec,
-        encode_state=encode_state,
-        encoder_is_causal=encoder_is_causal,
+        goal_mode=goal_mode,
         device=device
     )
 

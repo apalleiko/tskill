@@ -15,18 +15,22 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
     return skill_pad_mask
 
 
-def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, device='cpu'):
+def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, stage=0, device='cpu'):
     """
     Gets a causal mask for the encoder. Is only the size of max seq len, so has to be repeated in the encoder itself.
     """
-    enc_src_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_seq_len, device=device)
     enc_tgt_mask = torch.nn.Transformer.generate_square_subsequent_mask(max_num_skills, device=device)
     enc_mem_mask = torch.ones(max_num_skills, max_seq_len, device=device).to(torch.bool)
     for s in range(max_num_skills):
-        sk_start = s*max_skill_len
-        sk_end = s*max_skill_len + max_skill_len
+        if stage == 4:
+            sk_start = s
+            sk_end = s+1
+        else:
+            sk_start = s*max_skill_len
+            sk_end = s*max_skill_len + max_skill_len
         enc_mem_mask[s,sk_start:sk_end] = False # Unmask skill attention to prior sequence items
-    return enc_src_mask, enc_mem_mask, enc_tgt_mask
+
+    return enc_mem_mask, enc_tgt_mask
 
 
 def get_dec_ar_masks(max_num_skills, max_skill_len, num_obs, device='cpu'):
