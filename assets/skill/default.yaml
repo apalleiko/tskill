@@ -23,7 +23,7 @@ model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
   alpha: [7,5,5,5]
-  hidden_dim: 256
+  hidden_dim: 512
   max_skill_len: 8
   encoder_obs: 4
   decoder_obs: 4
@@ -52,8 +52,8 @@ model:
 
 training:
   out_dir: out/VAE/056
-  max_it: 50000
-  batch_size: 12
+  max_it: 30000
+  batch_size: 10
   batch_size_val: 6
   print_every: 100
   visualize_every: 2000
@@ -67,7 +67,7 @@ training:
   lr_state_encoder: 0.0000
   lr: 0.0001
   lr_decay: 0.999
-  lr_warmup_epochs: 0
+  lr_warmup_epochs: 2
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: True

@@ -15,7 +15,7 @@ def get_skill_pad_from_seq_pad(seq_pad, max_skill_len):
     return skill_pad_mask
 
 
-def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, stage=0, device='cpu'):
+def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, num_obs, stage=0, device='cpu'):
     """
     Gets a causal mask for the encoder. Is only the size of max seq len, so has to be repeated in the encoder itself.
     """
@@ -23,7 +23,11 @@ def get_enc_causal_masks(max_seq_len, max_num_skills, max_skill_len, stage=0, de
     enc_mem_mask = torch.ones(max_num_skills, max_seq_len, device=device).to(torch.bool)
     for s in range(max_num_skills):
         if stage == 4:
-            sk_start = s
+            if num_obs > s+1:
+                v = 0
+            else:
+                v = s+1-num_obs
+            sk_start = v
             sk_end = s+1
         else:
             sk_start = s*max_skill_len

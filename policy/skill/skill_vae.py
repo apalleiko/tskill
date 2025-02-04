@@ -147,7 +147,7 @@ class TSkillCVAE(nn.Module):
         self.decoder_obs = decoder_obs
         self.encoder_obs = encoder_obs
         self.goal_mode = goal_mode
-        self.stage = kwargs.get("stage",4)
+        self.stage = kwargs.get("stage",0)
 
         self.vq = Quantization(self.alpha, device)
 
@@ -318,7 +318,7 @@ class TSkillCVAE(nn.Module):
         goal_src = goal_src + enc_type_embed[3, :, :] # add type 3 "goal" embedding
 
         # Encoder causal masks
-        mem_mask, tgt_mask = get_enc_causal_masks(SEQ, MNS, self.max_skill_len, self.stage, device=self._device)
+        mem_mask, tgt_mask = get_enc_causal_masks(SEQ, MNS, self.max_skill_len, self.encoder_obs, self.stage, device=self._device)
         if self.stage in (0,1):
             enc_src = torch.cat([goal_src, qpos_src, img_src, action_src], axis=0) # ((2+num_cam)*seq, bs, hidden_dim)
             NUM_SEQ = (2+NUM_CAM)
@@ -341,15 +341,6 @@ class TSkillCVAE(nn.Module):
         if mem_mask is not None:
             mem_mask = mem_mask.repeat(1, NUM_SEQ) # (skill_seq, (2+num_cam)*seq)
             mem_mask = torch.cat((torch.zeros(MNS, 1, device=self._device).to(torch.bool), mem_mask), dim=1) # (skill_seq, 1+(2+num_cam)*seq)
-
-        from matplotlib import pyplot as plt
-        fig = plt.figure(1, figsize=(50,50))
-        (ax1, ax2),(ax3,ax4) = fig.subplots(2,2)
-        # ax1.imshow(src_pad_mask.cpu().to(torch.int), cmap="plasma")
-        ax2.imshow(mem_mask.cpu().to(torch.int), cmap="plasma")
-        ax3.imshow(tgt_pad_mask.cpu().to(torch.int), cmap="plasma")
-        ax4.imshow(tgt_mask.cpu().to(torch.int), cmap="plasma")
-        plt.show()
 
         # encoder tgt
         enc_tgt_pe = self.get_pos_table(MNS).permute(1, 0, 2).repeat(1, BS, 1) * self.enc_tgt_pos_scale_factor # (skill_seq, bs, hidden_dim)
@@ -407,22 +398,47 @@ class TSkillCVAE(nn.Module):
 
         return a_hat
     
-    def get_action(self, data):
-        # Define current info
-        latent = data["latent"] # (bs, num_z, z_dim)
-        bs, num_z, _ = latent.shape
-        skill_pad_mask = torch.zeros(bs,num_z)
-        seq_pad_mask = torch.zeros(bs,num_z*self.max_skill_len)
+    def get_action(self, data, t):
+        # Get image features from state encoder
+        img_src, img_pe = self.stt_encoder(data["rgb"]) # (seq, bs, num_cam, h*w, c)
+        img_src = img_src.transpose(0,1) # (bs, seq, ...)
+        img_pe = img_pe.transpose(0,1)
+        bs = img_src.shape[0]
 
-        dec_mem_mask, dec_tgt_mask = get_dec_ar_masks(num_z, self.max_skill_len, self.decoder_obs)
+        if t==0:
+            self.execution_data = dict()
+            self.execution_data["t_plan"] = 0
 
-        z = latent.transpose(0,1)
-        with torch.no_grad():
-            a_hat = self.skill_decode(z, 
-                                      skill_pad_mask, seq_pad_mask,
-                                      dec_mem_mask, dec_tgt_mask) # (MSL, bs, action_dim)
-        self.execution_data = dict()
-        self.execution_data["a_hat"] = a_hat.detach()
+        t_act = self.execution_data["t_plan"] % self.max_skill_len
+        # Get next skill prediction if appropriate
+        if t_act == 0:
+            # Set or update data related to current planning segment
+            if self.execution_data["t_plan"] == 0:
+                self.execution_data["actions"] = None
+                self.execution_data["img_feat"] = img_src # (bs, seq, ...)
+                self.execution_data["img_pe"] = img_pe
+                self.execution_data["state"] = data["state"] # (bs, seq, state_dim)
+            else:
+                self.execution_data["img_feat"] = torch.cat((self.execution_data["img_feat"], img_src), dim=1)
+                self.execution_data["img_pe"] = torch.cat((self.execution_data["img_pe"], img_pe), dim=1)
+                self.execution_data["state"] = torch.cat((self.execution_data["state"], data["state"]), dim=1)
+
+            # Set/update data required for model call
+            self.execution_data["skill_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1])
+            self.execution_data["seq_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1]*self.max_skill_len)
+            if "goal_feat" in data.keys():
+                self.execution_data["goal_feat"] = data["goal_feat"]
+                self.execution_data["goal_pe"] = data["goal_pe"]
+            else:
+                self.execution_data["goal"] = data["goal"]
+
+            out = self.forward(self.execution_data, use_precalc=True)
+            self.execution_data["a_hat"] = out["a_hat"] # (bs, seq, act_dim)
+
+        a_t = self.execution_data["a_hat"][:,t_act-self.max_skill_len,:]
+        self.execution_data["t_plan"] += 1
+        
+        return a_t
 
         return a_hat
 
