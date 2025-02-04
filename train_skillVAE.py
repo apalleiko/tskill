@@ -116,7 +116,7 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 1
+        cfg["training"]["batch_size"] = 2
         cfg["training"]["batch_size_val"] = 12
         cfg["training"]["batch_size_alt"] = 0
         cfg["training"]["visualize_every"] = 1

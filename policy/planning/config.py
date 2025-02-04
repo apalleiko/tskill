@@ -54,13 +54,16 @@ def get_model(cfg, device=None):
         vae_cfg = cfg["vae_cfg"]
     vae = get_vae(vae_cfg, device=device)
     
-    if not train_vae and train_stt_encoder:
-        stt_encoder = get_stt_encoder(vae_cfg["model"]["state_encoder"])
-    elif train_vae and train_stt_encoder: # Train separate VAE for the model
-        stt_encoder = vae.stt_encoder
-    else:
+    for name in ["state_encoder"]:
+        cfg_model[name].update({"hidden_dim": cfg_model["hidden_dim"]})    
+    stt_encoder_1 = get_stt_encoder(cfg_model["state_encoder"])
+    stt_encoder_2 = get_stt_encoder(cfg_model["state_encoder"])
+
+    if not train_stt_encoder:
         print("Freezing state encoder network!")
-        stt_encoder = vae.stt_encoder
+        stt_encoder_2 = stt_encoder_1
+        freeze_network(stt_encoder_1)
+        # freeze_network(stt_encoder_2)
 
     if not train_vae:
         print("Freezing CVAE network!")
@@ -72,7 +75,7 @@ def get_model(cfg, device=None):
         cond_plan,
         goal_mode,
         obs_history,
-        stt_encoder,
+        (stt_encoder_1, stt_encoder_2),
         device=device
     )
 

@@ -22,13 +22,14 @@ from LIBERO.libero.lifelong.algos import *
 from LIBERO.libero.lifelong.metric import (
     raw_obs_to_tensor_obs)
 
-from LIBERO.libero.lifelong.main import get_task_embs
+# from LIBERO.libero.lifelong.main import get_task_embs
 
 import time
 import dill as pickle
 
 from policy import config
 from policy.dataset.dataset_loaders import dataset_loader
+from policy.dataset.data_utils import get_task_embs
 from policy.dataset.LIBEROdataset import LiberoDataset
 from policy.dataset.multitask_dataset import MultitaskDataset
 from policy.checkpoints import CheckpointIO
@@ -79,10 +80,14 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
             s = s.item()
 
             if task_id == -1:
+                task_dataset = dataset
                 demo_name = dataset.dataset_file.split('/')[-1].split('.')[0][:-5]
                 task = [t for t in benchmark.tasks if t.name == demo_name][0]
+                task_vec = task.goal_mode
             else:
                 task = benchmark.get_task(task_id)
+                task_dataset = [d for d in dataset.sequence_datasets if task.name == d.dataset_file.split('/')[-1].split('.')[0][:-5]][0]
+                task_vec = task_dataset.goal_mode
             print("RUNNING ON TASK: ",task.name)
 
             save_folder = os.path.join(
@@ -102,7 +107,6 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
                 "camera_heights": 128,
                 "camera_widths": 128,
             }
-
 
             init_states_path = os.path.join(
                 cfg["libero_cfg"]["init_states_folder"], task.problem_folder, task.init_states_file
@@ -139,13 +143,14 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
                 with torch.no_grad(), VideoWriter(video_folder + f"_{i}", save_videos) as video_writer:
                     while steps < max_steps:
-                        data = [dataset.from_obs(o) for o in obs]
+                        data = [task_dataset.from_obs(o) for o in obs]
                         current_data = dict()
+                        current_data["goal"] = torch.cat([task_vec for o in obs], dim=0)
                         for k in data[0].keys():
                             current_data[k] = torch.cat([d[k] for d in data], dim=0)
 
                         actions = model.get_action(current_data, steps)
-                        actions = dataset.action_scaling(actions,"inverse").numpy()
+                        actions = task_dataset.action_scaling(actions,"inverse").numpy()
                         obs = []
                         for j in range(len(env_i)):
                             env = env_i[j]
@@ -163,6 +168,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
                         steps += 1
                         pbar.update()
                     
+                    pbar.close()
                     print(batch_dones)
 
                 if all(dones):
@@ -188,7 +194,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
 if __name__ == "__main__":
 
-    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/009"
+    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/018"
     cfg_path = os.path.join(model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     method = cfg["method"]
@@ -201,10 +207,9 @@ if __name__ == "__main__":
                                                 fullseq_override=True,
                                                 preshuffle=False,
                                                 pad2msl=True)
-    # print(len(train_dataset), len(val_dataset))
     
     # Model
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
-    print(evalute(cfg, model, train_dataset, [2], 40, 8))
+    load_dict = checkpoint_io.load("model.pt")
+    print(evalute(cfg, model, train_dataset, 2788, 16, 8))

@@ -289,6 +289,10 @@ class TSkillCVAE(nn.Module):
         # project action sequences to hidden dim (bs, seq, action_dim)
         action_src = self.enc_action_proj(actions) # (bs, seq, hidden_dim)
         action_src = self.enc_action_norm(action_src).permute(1, 0, 2) # (seq, bs, hidden_dim)
+        
+        if self.encoder_is_causal:
+            for i in range(MNS):
+                src_pad_mask[:,i*self.max_skill_len] = False # Prevents NANs by having fully padded memory for a skill
 
         if self.encode_state:
             # Add in action src type
@@ -354,7 +358,7 @@ class TSkillCVAE(nn.Module):
                                     tgt_key_padding_mask=tgt_pad_mask,
                                     memory_key_padding_mask=src_pad_mask,
                                     tgt_is_causal=False, memory_is_causal=False) # (skill_seq, bs, hidden_dim)
-
+        
         e = self.enc_z(enc_output)
         z = self.vq(e)
 

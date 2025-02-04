@@ -22,18 +22,18 @@ data:
 model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
-  alpha: [9,5,5,5]
+  alpha: [7,5,5,5]
   hidden_dim: 256
-  max_skill_len: 10
-  decoder_obs: 2
+  max_skill_len: 8
+  decoder_obs: 4
   autoregressive_decode: True
-  encode_state: False
+  encode_state: True
   encoder_is_causal: True
   
   encoder:
     dropout : 0.1
     nheads : 8
-    dim_feedforward : 1024
+    dim_feedforward : 2048
     enc_layers : 0
     dec_layers : 6
     pre_norm : False
@@ -41,9 +41,9 @@ model:
   decoder:
     dropout : 0.1
     nheads : 8
-    dim_feedforward : 1024
+    dim_feedforward : 2048
     enc_layers : 0
-    dec_layers : 4
+    dec_layers : 6
     pre_norm : False
   
   state_encoder:
@@ -52,14 +52,14 @@ model:
     position_embedding: sine
 
 training:
-  out_dir: out/VAE/050
+  out_dir: out/VAE/055
   max_it: 50000
   batch_size: 12
-  batch_size_val: 12
+  batch_size_val: 6
   print_every: 100
   visualize_every: 2000
   checkpoint_every: 1000
-  validate_every: 2000
+  validate_every: 1000
   backup_every: 1000
   model_selection_metric: act_loss
   model_selection_mode: minimize

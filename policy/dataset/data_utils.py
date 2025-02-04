@@ -38,7 +38,7 @@ def pad2size(items,sz,max_skill_len):
 
 
 def efficient_collate_fn(batch):
-    max_skill_len = 10 #HARDCODED
+    max_skill_len = 8 #HARDCODED
     collate_fn = torch.utils.data.default_collate
     sizes = [b["actions"].shape[0] for b in batch]
 
