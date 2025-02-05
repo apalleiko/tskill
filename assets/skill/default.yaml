@@ -52,7 +52,7 @@ model:
 
 training:
   out_dir: out/VAE/058
-  max_it: 30000
+  max_it: 20000
   batch_size: 16
   batch_size_val: 6
   print_every: 100

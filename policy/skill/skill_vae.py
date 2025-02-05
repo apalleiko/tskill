@@ -340,11 +340,20 @@ class TSkillCVAE(nn.Module):
                 src_pad_mask[:,i*self.max_skill_len] = False # Prevents NANs by having fully padded memory for a skill
             src_pad_mask = src_pad_mask.repeat(1,NUM_SEQ) # (bs, (2+num_cam)*seq)
             src_pad_mask = torch.cat((torch.zeros(BS, 1, device=self._device).to(torch.bool), src_pad_mask), dim=1) # (bs, 1+(2+num_cam)*seq)
+            # Add masking for each stage (0: with actions, 1: gradually mask actions, 2: no actions, 3: gradually masking obs, 4: only initial obs and goal)
             if self.stage == 1: # Apply random action masking
                 val = kwargs.get("mask_rate")
                 val = np.clip(val+0.1,0,1)
-                action_mask = torch.where(torch.rand(BS, SEQ)>val,True,False).to(self._device)
-                src_pad_mask[:,-SEQ:] = action_mask
+                action_mask = torch.where(torch.rand(BS, SEQ)<val,True,False).to(self._device)
+                src_pad_mask[:,-SEQ:] = (action_mask | src_pad_mask[:,-SEQ:])
+            elif self.stage == 3: # Apply random obs masking
+                val = kwargs.get("mask_rate")
+                val = np.clip(val+0.1,0,1)
+                obs_mask = torch.where(torch.rand(BS, SEQ)<val,True,False).to(self._device)
+                for i in range(MNS): # Always unmask initial obs
+                    obs_mask[:,i*self.max_skill_len] = False
+                obs_mask = obs_mask.repeat(1,NUM_SEQ)
+                src_pad_mask[:,1:] = (obs_mask | src_pad_mask[:,1:])
         if mem_mask is not None:
             mem_mask = mem_mask.repeat(1, NUM_SEQ) # (skill_seq, (2+num_cam)*seq)
             mem_mask = torch.cat((torch.zeros(MNS, 1, device=self._device).to(torch.bool), mem_mask), dim=1) # (skill_seq, 1+(2+num_cam)*seq)
