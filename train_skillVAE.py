@@ -124,7 +124,7 @@ def main(args):
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 1000
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 1
+        cfg["training"]["max_it"] = 6
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)

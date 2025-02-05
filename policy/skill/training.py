@@ -21,6 +21,7 @@ class Trainer(BaseTrainer):
         self.epoch_it = 0
         self.step_it = 0
         self.zero_grad = True
+        self.max_its = cfg["training"]["max_it"]
 
         self.model = model
         self.optimizer = optimizer
@@ -107,7 +108,7 @@ class Trainer(BaseTrainer):
 
         # Get model outputs
         if out is None:
-            out = self.model(data, use_precalc=self.use_precalc)
+            out = self.model(data, use_precalc=self.use_precalc, mask_rate=self.step_it/self.max_its)
         a_hat = out["a_hat"]
 
         # Set target and pred actions to 0 for padded sequence outputs

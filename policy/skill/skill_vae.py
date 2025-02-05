@@ -147,9 +147,11 @@ class TSkillCVAE(nn.Module):
         self.decoder_obs = decoder_obs
         self.encoder_obs = encoder_obs
         self.goal_mode = goal_mode
-        self.stage = kwargs.get("stage",0)
+        self.stage = kwargs.get("stage",1)
 
         self.vq = Quantization(self.alpha, device)
+        if self.stage != 0:
+            self.decoder.requires_grad_ = False
 
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
@@ -252,7 +254,7 @@ class TSkillCVAE(nn.Module):
 
         ### Encode inputs to latent
         z = self.forward_encode(qpos, actions, img_info, goal_src,
-                                seq_pad_mask, skill_pad_mask) # (skill_seq, bs, latent_dim)
+                                seq_pad_mask, skill_pad_mask, **kwargs) # (skill_seq, bs, latent_dim)
         
         # Check for NaNs
         if torch.any(torch.isnan(z)):
@@ -278,7 +280,7 @@ class TSkillCVAE(nn.Module):
         
 
     def forward_encode(self, qpos, actions, img_info, goal_src,
-                       src_pad_mask, tgt_pad_mask):
+                       src_pad_mask, tgt_pad_mask, **kwargs):
         """Encode skill sequence based on robot state, action, and image input sequence"""
         img_feat, img_pe = img_info # (seq, bs, num_cam, h*w, hidden)
         BS, SEQ, _ = qpos.shape # Use bs for masking
@@ -338,6 +340,11 @@ class TSkillCVAE(nn.Module):
                 src_pad_mask[:,i*self.max_skill_len] = False # Prevents NANs by having fully padded memory for a skill
             src_pad_mask = src_pad_mask.repeat(1,NUM_SEQ) # (bs, (2+num_cam)*seq)
             src_pad_mask = torch.cat((torch.zeros(BS, 1, device=self._device).to(torch.bool), src_pad_mask), dim=1) # (bs, 1+(2+num_cam)*seq)
+            if self.stage == 1: # Apply random action masking
+                val = kwargs.get("mask_rate")
+                val = np.clip(val+0.1,0,1)
+                action_mask = torch.where(torch.rand(BS, SEQ)>val,True,False).to(self._device)
+                src_pad_mask[:,-SEQ:] = action_mask
         if mem_mask is not None:
             mem_mask = mem_mask.repeat(1, NUM_SEQ) # (skill_seq, (2+num_cam)*seq)
             mem_mask = torch.cat((torch.zeros(MNS, 1, device=self._device).to(torch.bool), mem_mask), dim=1) # (skill_seq, 1+(2+num_cam)*seq)
@@ -439,9 +446,6 @@ class TSkillCVAE(nn.Module):
         self.execution_data["t_plan"] += 1
         
         return a_t
-
-        return a_hat
-
 
     def to(self, device):
         model = super().to(device)

@@ -51,9 +51,9 @@ model:
     position_embedding: sine
 
 training:
-  out_dir: out/VAE/056
+  out_dir: out/VAE/058
   max_it: 30000
-  batch_size: 10
+  batch_size: 16
   batch_size_val: 6
   print_every: 100
   visualize_every: 2000
@@ -65,9 +65,9 @@ training:
   n_workers: 2
   n_workers_val: 2
   lr_state_encoder: 0.0000
-  lr: 0.0001
+  lr: 0.00003
   lr_decay: 0.999
-  lr_warmup_epochs: 2
+  lr_warmup_epochs: 0
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: True
