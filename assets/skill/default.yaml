@@ -27,7 +27,7 @@ model:
   max_skill_len: 8
   decoder_obs: 4
   autoregressive_decode: True
-  encode_state: True
+  encode_state: False
   encoder_is_causal: True
   
   encoder:
@@ -52,7 +52,7 @@ model:
     position_embedding: sine
 
 training:
-  out_dir: out/VAE/055
+  out_dir: out/VAE/057
   max_it: 50000
   batch_size: 12
   batch_size_val: 6
@@ -68,7 +68,7 @@ training:
   lr_state_encoder: 0.0000
   lr: 0.0001
   lr_decay: 0.999
-  lr_warmup_epochs: 0
+  lr_warmup_epochs: 2
   weight_decay: 0.0001
   gradient_accumulation: 1
   use_precalc: True

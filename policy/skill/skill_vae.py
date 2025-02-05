@@ -235,7 +235,7 @@ class TSkillCVAE(nn.Module):
         ### Get causal/other masks, if applicable
         # Encoder causal masks
         if self.encoder_is_causal:
-            enc_src_mask, enc_mem_mask, enc_tgt_mask = get_enc_causal_masks(SEQ, MNS, self.max_skill_len, device=self._device)
+            enc_src_mask, enc_mem_mask, enc_tgt_mask = get_enc_causal_masks(SEQ, MNS, self.max_skill_len, self.decoder_obs, device=self._device)
         else:
             enc_src_mask, enc_mem_mask = enc_tgt_mask = None
         # Decoder ar masks
@@ -355,7 +355,7 @@ class TSkillCVAE(nn.Module):
         #                           tgt_mask=tgt_mask) # (skill_seq, bs, hidden_dim)
 
         enc_output = self.encoder(enc_tgt, enc_src, tgt_mask=tgt_mask, memory_mask=mem_mask,
-                                    tgt_key_padding_mask=tgt_pad_mask,
+                                    tgt_key_padding_mask=None,
                                     memory_key_padding_mask=src_pad_mask,
                                     tgt_is_causal=False, memory_is_causal=False) # (skill_seq, bs, hidden_dim)
         
