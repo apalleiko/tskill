@@ -157,31 +157,12 @@ class DataAugmentation:
         if self.subsequence_rate > val:
             # Uniformly sample how much of the sequence to use for the batch
             # from 1 to entire (unpadded) seq
-            num_seq = torch.randint(1, num_unpad_seq-1, (1,1)).squeeze()
+            num_seq = torch.randint(1, num_unpad_seq-5, (1,1)).squeeze()
             
             # Start at random point in the sequence
-            from_start = torch.round(torch.rand(1)).item()
             for k,v in data.items():
                 if "mask" not in k and "goal" not in k:
-                    if not from_start:
-                        data[k] = v[num_seq:,...]
-                    else:
-                        data[k] = v[:num_seq,...]
-
-            # # Reset "new" sequences to the beginning (for positional encodings)
-            # for k,v in data.items():
-            #     if "mask" not in k and "goal" not in k:
-            #         new_seq = torch.zeros_like(v)
-            #         new_seq[:num_seq,...] = v[:num_seq,...]
-            #         data[k] = new_seq
-
-            # # Reset new "goal" state
-            # if self.method == "plan":
-            #     if "img_feat" in data.keys():
-            #         data["goal_feat"] = data["img_feat"][num_seq-1:num_seq,...]
-            #         data["goal_pe"] = data["img_pe"][num_seq-1:num_seq,...]
-            #     else:
-            #         data["goal"] = data["rgb"][num_seq-1:num_seq,...]
+                    data[k] = v[num_seq:,...]
 
         return data
 

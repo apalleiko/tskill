@@ -156,7 +156,7 @@ class Trainer(BaseTrainer):
         if alt := kwargs.get("alt",False):
             prev_cond_plan = self.model.conditional_plan
             self.model.conditional_plan = not prev_cond_plan
-        out = self.model(data, use_precalc=self.use_precalc, sep_vae_grad=True)
+        out = self.model(data, use_precalc=self.use_precalc)
         if alt:
             self.model.conditional_plan = prev_cond_plan
 

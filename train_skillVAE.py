@@ -116,7 +116,7 @@ def main(args):
 
     # cfg stuff
     if args.debug:
-        cfg["training"]["batch_size"] = 2
+        cfg["training"]["batch_size"] = 5
         cfg["training"]["batch_size_val"] = 12
         cfg["training"]["batch_size_alt"] = 0
         cfg["training"]["visualize_every"] = 1
@@ -124,7 +124,7 @@ def main(args):
         cfg["training"]["backup_every"] = 1000
         cfg["training"]["validate_every"] = 1000
         cfg["training"]["checkpoint_every"] = 1000
-        cfg["training"]["max_it"] = 1
+        cfg["training"]["max_it"] = 5
 
     # Shorthands
     lr = cfg["training"].get("lr", 1e-3)
