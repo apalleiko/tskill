@@ -133,7 +133,7 @@ def main():
     # Model
     model: TSkillCVAE | TSkillPlan = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(args.model_dir, model=model)
-    load_dict = checkpoint_io.load("model_best.pt")
+    load_dict = checkpoint_io.load("model.pt")
     # load_dict = checkpoint_io.load("model.pt")
     model.to(model._device)
     if method == "plan":
@@ -378,39 +378,25 @@ def main():
                         video_folder = vf + "_planned_fullseq"
                         pbar.set_postfix(
                             {"mode": "Planned Fullseq", "cond_plan": model.conditional_plan})
-                        use_vae = False
                     else:
-                        use_vae = True
                         video_folder = vf + "_vae_fullseq"
                         pbar.set_postfix(
                             {"mode": "VAE Fullseq"})
                             
-                    fig = plt.figure(1, figsize=(10,10))
-                    (ax1,ax2),(ax3, ax4),(ax5,ax6),(ax7,ax8),(ax9,ax10),(ax11,ax12) = fig.subplots(6,2)
-                    ax7.set_xlim(0,args.max_steps)
-                    ax8.set_xlim(0,args.max_steps)
-                    states = torch.zeros(1,0,vae.state_dim)
-                    acts = torch.zeros(0, vae.action_dim)
-                    tacts = torch.zeros(0, vae.action_dim)
+                    # fig = plt.figure(1, figsize=(10,10))
+                    # (ax1,ax2),(ax3, ax4),(ax5,ax6),(ax7,ax8),(ax9,ax10),(ax11,ax12) = fig.subplots(6,2)
+                    # ax7.set_xlim(0,args.max_steps)
+                    # ax8.set_xlim(0,args.max_steps)
+                    # states = torch.zeros(1,0,vae.state_dim)
+                    # acts = torch.zeros(0, vae.action_dim)
+                    # tacts = torch.zeros(0, vae.action_dim)
 
                     while steps < args.max_steps:
                         current_data = task_dataset.from_obs(obs)
 
-                        if not use_vae:
-                            if model.goal_mode == "image":
-                                if "goal_feat" in data.keys():
-                                    current_data["goal_feat"] = data["goal_feat"]
-                                    current_data["goal_pe"] = data["goal_pe"]
-                                else:
-                                    current_data["goal"] = data["goal"]
-                        else:
-                            if steps == data["actions"].shape[1]:
-                                break
-                            skill_num = steps // model.max_skill_len
-                            current_data["latent"] = out["z"][:,skill_num:skill_num+1,:]
-
+                        current_data["goal"] = data["goal"]
                         actions = model.get_action(current_data, steps)
-                        acts = torch.cat((acts, actions), dim=0)
+                        # acts = torch.cat((acts, actions), dim=0)
                         actions = dataset.action_scaling(actions,"inverse").numpy()[0,:]
                         obs, reward, done, info = env.step(actions)
                         img = env.sim.render(512,512,camera_name="frontview")[::-1,...]

@@ -16,9 +16,9 @@ data:
   full_seq_val: False
 
 model:
-  goal_mode: one-hot
-  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/055
-  hidden_dim: 512
+  goal_mode: clip
+  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/057
+  hidden_dim: 256
   dropout : 0.1
   nheads : 8
   dim_feedforward : 2048
@@ -41,7 +41,7 @@ training:
   out_dir: out/Plan/022
   train_vae: False
   max_it: 50000
-  batch_size: 24
+  batch_size: 12
   batch_size_val: 2
   batch_size_alt: 4
   fraction_alt: 0.0
@@ -55,8 +55,8 @@ training:
   model_selection_mode: minimize
   n_workers: 2
   n_workers_val: 2
-  lr_state_encoder: 0.00000
-  lr: 0.00003
+  lr_state_encoder: 0.0000
+  lr: 0.00001
   lr_decay: 0.999
   lr_warmup_epochs: 2
   weight_decay: 0.0001

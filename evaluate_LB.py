@@ -97,7 +97,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
             video_folder = os.path.join(
                 save_dir,
-                f"{benchmark}_{s}_on{task_id}_videos",
+                f"{benchmark}_{s}_on{task_id}_videos/",
             )
 
             env_args = {
@@ -135,13 +135,13 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
                 steps = 0
                 num_success = 0
-                max_steps = 250
+                max_steps = 350
 
                 pbar = tqdm(position=0, leave=None, unit="step", dynamic_ncols=True)
                 pbar.reset(total=max_steps)
                 pbar.set_postfix({"Batch": i})
 
-                with torch.no_grad(), VideoWriter(video_folder + f"_{i}", save_videos) as video_writer:
+                with torch.no_grad(), VideoWriter(video_folder + f"{i}", save_videos) as video_writer:
                     while steps < max_steps:
                         data = [task_dataset.from_obs(o) for o in obs]
                         current_data = dict()
@@ -194,7 +194,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
 if __name__ == "__main__":
 
-    model_dir = "/home/mrl/Documents/Projects/tskill/out/Plan/022"
+    model_dir = "/home/mrl/Documents/Projects/tskill/out/VAE/058"
     cfg_path = os.path.join(model_dir, "config.yaml")
     cfg = config.load_config(cfg_path, None)
     method = cfg["method"]
@@ -211,5 +211,5 @@ if __name__ == "__main__":
     # Model
     model = config.get_model(cfg, device="cpu")
     checkpoint_io = CheckpointIO(model_dir, model=model)
-    load_dict = checkpoint_io.load("model.pt")
+    load_dict = checkpoint_io.load("model_eval.pt")
     print(evalute(cfg, model, train_dataset, 2788, 16, 8))

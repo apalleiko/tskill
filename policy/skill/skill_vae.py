@@ -147,7 +147,7 @@ class TSkillCVAE(nn.Module):
         self.decoder_obs = decoder_obs
         self.encoder_obs = encoder_obs
         self.goal_mode = goal_mode
-        self.stage = kwargs.get("stage",1)
+        self.stage = kwargs.get("stage",4)
 
         self.vq = Quantization(self.alpha, device)
         if self.stage != 0:
@@ -234,7 +234,7 @@ class TSkillCVAE(nn.Module):
         qpos = data["state"].to(self._device)
         actions = data["actions"].to(self._device) if data["actions"] is not None else None
         is_training = actions is not None
-        seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool)
+        seq_pad_mask = data["seq_pad_mask"].to(self._device, torch.bool) if data["seq_pad_mask"] is not None else None
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
         goal_src = data["goal"].to(self._device)
 
@@ -292,11 +292,10 @@ class TSkillCVAE(nn.Module):
         enc_type_embed = enc_type_embed.unsqueeze(1).repeat(1, BS, 1) # (4, bs, hidden_dim)
 
         # project action sequences to hidden dim (bs, seq, action_dim)
-        action_src = self.enc_action_proj(actions) # (bs, seq, hidden_dim)
-        action_src = self.enc_action_norm(action_src).permute(1, 0, 2) # (seq, bs, hidden_dim)
-        
-        # Add in action src type
-        action_src = action_src + enc_type_embed[0, :, :] # add type 1 embedding
+        if actions is not None:
+            action_src = self.enc_action_proj(actions) # (bs, seq, hidden_dim)
+            action_src = self.enc_action_norm(action_src).permute(1, 0, 2) # (seq, bs, hidden_dim)
+            action_src = action_src + enc_type_embed[0, :, :] # add type 1 embedding
         
         # project position sequences to hidden dim (bs, seq, state_dim)
         qpos_src = self.enc_state_proj(qpos) # (bs, seq, hidden_dim)
@@ -416,6 +415,7 @@ class TSkillCVAE(nn.Module):
     
     def get_action(self, data, t):
         # Get image features from state encoder
+        self.stage = 4
         img_src, img_pe = self.stt_encoder(data["rgb"]) # (seq, bs, num_cam, h*w, c)
         img_src = img_src.transpose(0,1) # (bs, seq, ...)
         img_pe = img_pe.transpose(0,1)
@@ -424,6 +424,7 @@ class TSkillCVAE(nn.Module):
         if t==0:
             self.execution_data = dict()
             self.execution_data["t_plan"] = 0
+            self.execution_data["num_skills"] = 1
 
         t_act = self.execution_data["t_plan"] % self.max_skill_len
         # Get next skill prediction if appropriate
@@ -438,10 +439,11 @@ class TSkillCVAE(nn.Module):
                 self.execution_data["img_feat"] = torch.cat((self.execution_data["img_feat"], img_src), dim=1)
                 self.execution_data["img_pe"] = torch.cat((self.execution_data["img_pe"], img_pe), dim=1)
                 self.execution_data["state"] = torch.cat((self.execution_data["state"], data["state"]), dim=1)
+                self.execution_data["num_skills"] += 1
 
             # Set/update data required for model call
-            self.execution_data["skill_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1])
-            self.execution_data["seq_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1]*self.max_skill_len)
+            self.execution_data["skill_pad_mask"] = torch.zeros(bs,self.execution_data["num_skills"])
+            self.execution_data["seq_pad_mask"] = None
             if "goal_feat" in data.keys():
                 self.execution_data["goal_feat"] = data["goal_feat"]
                 self.execution_data["goal_pe"] = data["goal_pe"]
