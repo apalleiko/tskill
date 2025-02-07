@@ -6,7 +6,7 @@ data:
   val_split: .04
   preshuffle: False
   max_seq_len: 380
-  action_scaling: normal
+  action_scaling: 1
   state_scaling: 1
   gripper_scaling: False
   augment: True
@@ -22,7 +22,7 @@ data:
 model:
   state_dim : 9 # LIBERO is 9, MS is 18
   action_dim : 7 # LIBERO is 7, MS is 8
-  alpha: [7,5,5,5]
+  alpha: [8,5,5,5]
   hidden_dim: 256
   max_skill_len: 8
   decoder_obs: 4
@@ -52,9 +52,9 @@ model:
     position_embedding: sine
 
 training:
-  out_dir: out/VAE/057
+  out_dir: out/VAE/061
   max_it: 50000
-  batch_size: 12
+  batch_size: 16
   batch_size_val: 6
   print_every: 100
   visualize_every: 2000

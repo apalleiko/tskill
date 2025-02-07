@@ -124,34 +124,30 @@ class TSkillPlan(nn.Module):
         skill_pad_mask = data["skill_pad_mask"].to(self._device, torch.bool)
         BS, MNS = skill_pad_mask.shape
 
+        if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
+            sc = self.max_skill_len
+            qpos_plan = qpos[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
+        else: # only pass in the relevant timesteps
+            sc = 1 # Only pass in obs at each planning timestep
+            qpos_plan = qpos
+
         ### Image calculation or features
         use_precalc = kwargs.get("use_precalc",False)
         if use_precalc:
-            img_src = data["img_feat"].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
-            img_pe = data["img_pe"].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
+            img_src = data["img_feat"][::sc,...].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
+            img_pe = data["img_pe"][::sc,...].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
         else:
-            images = data["rgb"].to(self._device)
+            images = data["rgb"][:,::sc,...].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
-            data["img_feat"] = img_src.transpose(0,1) # VAE expects (bs, seq, ...)
-            data["img_pe"] = img_pe.transpose(0,1)
+            # data["img_feat"] = img_src.transpose(0,1) # VAE expects (bs, seq, ...)
+            # data["img_pe"] = img_pe.transpose(0,1)
+        img_info_plan = (img_src, img_pe)
         num_cam = img_src.shape[2]
 
         goal_src = data["goal"].to(self._device)
 
         ### Get conditional planning masks if applicable
-        if self.conditional_plan:
-            plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, self.num_obs, device=self._device)
-            if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
-                qpos_plan = qpos[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
-                img_info_plan = (img_src[::self.max_skill_len,...], img_pe[::self.max_skill_len,...]) # (MNS, bs, ...)
-            else: # only pass in the relevant timesteps
-                qpos_plan = qpos
-                img_info_plan = (img_src, img_pe) # (MNS, bs, ...) # Only pass in obs at each planning timestep
-        else:
-            _, _, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, self.num_obs, device=self._device)
-            plan_src_mask = plan_mem_mask = None
-            qpos_plan = qpos[:,:1,:] # (bs, 1, state_dim)
-            img_info_plan = (img_src[:1,...], img_pe[:1,...]) # (1, bs, ...)
+        plan_src_mask, plan_mem_mask, plan_tgt_mask = get_plan_ar_masks(self.num_img_feats*num_cam, MNS, self.goal_mode, self.num_obs, device=self._device)
 
         if is_training:
             # Get target skills from vae

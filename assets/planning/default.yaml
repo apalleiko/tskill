@@ -17,8 +17,8 @@ data:
 
 model:
   goal_mode: clip
-  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/057
-  hidden_dim: 256
+  vae_path: /home/mrl/Documents/Projects/tskill/out/VAE/059
+  hidden_dim: 512
   dropout : 0.1
   nheads : 8
   dim_feedforward : 2048
@@ -38,7 +38,7 @@ loss:
   act_weight: 0
 
 training:
-  out_dir: out/Plan/023
+  out_dir: out/Plan/025
   train_vae: False
   max_it: 50000
   batch_size: 12

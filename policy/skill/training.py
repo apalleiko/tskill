@@ -113,7 +113,9 @@ class Trainer(BaseTrainer):
         # Set target and pred actions to 0 for padded sequence outputs
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
-        loss_dict["act_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        # loss_dict["act_loss"] = F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
+        loss_dict["act_loss"] = F.l1_loss(a_hat_l, a_targ_l)
+
 
         # Compute some metrics
         for i in [1,10,50,100]:

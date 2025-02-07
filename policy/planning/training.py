@@ -168,7 +168,8 @@ class Trainer(BaseTrainer):
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
         # loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-        metric_dict["act_plan_loss"] = (F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions)
+        # metric_dict["act_plan_loss"] = (F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions)
+        metric_dict["act_plan_l1_loss"] = F.l1_loss(a_hat_l, a_targ_l)
 
         # Get unpadded skill nll loss
         z_targ_l = self.model.vae.vq.codes_to_indices(z_targ)

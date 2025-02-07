@@ -97,7 +97,7 @@ def evalute(cfg, model, dataset, seed, env_num, batch_size, save_videos=True):
 
             video_folder = os.path.join(
                 save_dir,
-                f"{benchmark}_{s}_on{task_id}_videos",
+                f"{benchmark.name}/{s}/on_{task_id}_videos/",
             )
 
             env_args = {
