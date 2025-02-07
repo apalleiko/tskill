@@ -147,10 +147,10 @@ class TSkillCVAE(nn.Module):
         self.decoder_obs = decoder_obs
         self.encoder_obs = encoder_obs
         self.goal_mode = goal_mode
-        self.stage = kwargs.get("stage",4)
+        self.stage = kwargs.get("stage",1)
 
         self.vq = Quantization(self.alpha, device)
-        if self.stage != 0:
+        if self.stage not in (0,1):
             self.decoder.requires_grad_ = False
 
         ### Get a sinusoidal position encoding table for a given sequence size
@@ -342,7 +342,7 @@ class TSkillCVAE(nn.Module):
             # Add masking for each stage (0: with actions, 1: gradually mask actions, 2: no actions, 3: gradually masking obs, 4: only initial obs and goal)
             if self.stage == 1: # Apply random action masking
                 val = kwargs.get("mask_rate")
-                val = np.clip(val+0.1,0,1)
+                val = np.clip(val,0,1)
                 action_mask = torch.where(torch.rand(BS, SEQ)<val,True,False).to(self._device)
                 src_pad_mask[:,-SEQ:] = (action_mask | src_pad_mask[:,-SEQ:])
             elif self.stage == 3: # Apply random obs masking
