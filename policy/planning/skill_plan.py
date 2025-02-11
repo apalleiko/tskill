@@ -3,7 +3,7 @@ from torch import nn
 import numpy as np
 
 import dill as pickle
-from policy.skill.skill_vae import TSkillCVAE
+from policy.skill.skill_vae import TSkillCVAE, top_k_sampling
 from policy.dataset.masking_utils import get_dec_ar_masks, get_plan_ar_masks
 
 
@@ -62,8 +62,7 @@ class TSkillPlan(nn.Module):
         self.goal_pe_scale_factor = nn.Parameter(torch.ones(1) * 0.01)
 
         # learned embeddings for the 4 input types (state, image, goal)
-        self.input_embed = nn.Embedding(3, self.hidden_dim) 
-        self.input_embed_scale_factor = nn.Parameter(torch.ones(3, 1) * 0.01)
+        self.input_embed = nn.Embedding(self.num_skills+1, self.hidden_dim) 
 
         ### Backbone
         self.stt_encoder = stt_encoder
@@ -74,20 +73,15 @@ class TSkillPlan(nn.Module):
 
         ### Inputs
         if self.goal_mode == "one-hot":
-            self.num_tasks = 90 # Hardcoded
-            self.goal_proj = nn.Sequential(nn.Linear(self.num_tasks, 1024),
-                                           nn.GELU(),
-                                           nn.Linear(1024,2048),
-                                           nn.GELU(),
-                                           nn.Linear(2048,self.hidden_dim)) # Hardcoded
-            self.goal_feat_norm = self.norm(self.hidden_dim)
+            self.goal_input_size = 90 # Hardcoded
         else:
-            self.goal_proj = nn.Sequential(nn.Linear(512, 1024),
-                                           nn.GELU(),
-                                           nn.Linear(1024,2048),
-                                           nn.GELU(),
-                                           nn.Linear(2048,self.hidden_dim)) # Hardcoded
-            self.goal_feat_norm = self.norm(self.hidden_dim)
+            self.goal_input_size = 512
+        self.goal_proj = nn.Sequential(nn.Linear(512, 1024),
+                                        nn.GELU(),
+                                        nn.Linear(1024,2048),
+                                        nn.GELU(),
+                                        nn.Linear(2048,self.hidden_dim)) # Hardcoded
+        self.goal_feat_norm = self.norm(self.hidden_dim)
         self.src_state_proj = nn.Linear(self.state_dim, int(self.hidden_dim/4))  # project qpos -> hidden
         self.src_img_proj = nn.Linear(self.num_img_feats,1)
         self.src_state_norm = self.norm(self.hidden_dim)
@@ -96,8 +90,7 @@ class TSkillPlan(nn.Module):
         ### Outputs
         self.tgt_norm = self.norm(self.hidden_dim)
         self.z_proj = nn.Linear(self.hidden_dim, self.num_skills) # project hidden -> latent
-        self.tgt_z_proj = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
-        self.tgt_start_token = nn.Parameter(torch.zeros(1,1,self.z_dim))
+        self.tgt_start_token = self.num_skills
 
         # Other
         self.metrics = dict()
@@ -126,7 +119,7 @@ class TSkillPlan(nn.Module):
 
         if is_training: # Get the qpos and images where the model will make next skill prediciton (every max_skill_len)
             sc = self.max_skill_len
-            qpos_plan = qpos[:,::self.max_skill_len,:] # (bs, MNS, state_dim)
+            qpos_plan = qpos[:,::sc,:] # (bs, MNS, state_dim)
         else: # only pass in the relevant timesteps
             sc = 1 # Only pass in obs at each planning timestep
             qpos_plan = qpos
@@ -134,8 +127,8 @@ class TSkillPlan(nn.Module):
         ### Image calculation or features
         use_precalc = kwargs.get("use_precalc",False)
         if use_precalc:
-            img_src = data["img_feat"][::sc,...].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
-            img_pe = data["img_pe"][::sc,...].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
+            img_src = data["img_feat"][:,::sc,...].transpose(0,1).to(self._device) # (seq, bs, num_cam, h*w, c)
+            img_pe = data["img_pe"][:,::sc,...].transpose(0,1).to(self._device) # (1, bs, num_cam, h*w, hidden)
         else:
             images = data["rgb"][:,::sc,...].to(self._device)
             img_src, img_pe = self.stt_encoder(images) # (seq, bs, num_cam, h*w, c)
@@ -151,31 +144,28 @@ class TSkillPlan(nn.Module):
 
         if is_training:
             # Get target skills from vae
-            vae_out = self.vae(data, use_precalc=use_precalc)
-            
+            vae_out = self.vae.forward(data, use_precalc=use_precalc)
+
             # Create tgt shifted right 1 token
-            z_tgt0 = self.tgt_start_token.repeat(1,BS,1)
-            z_tgt = vae_out["z"].clone().detach().permute(1,0,2) # (skill_seq, bs, z_dim)
-            z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...]))
-            mask_rate=0.2
+            z_tgt0 = self.tgt_start_token * torch.ones(1,BS,device=self._device) # (1, bs)
+            z_tgt = vae_out["idx"].clone().detach().permute(1,0) # (skill_seq, bs)
+            z_tgt = torch.vstack((z_tgt0, z_tgt[:-1,...])).to(torch.int) # (skill_seq, bs)
         else:
-            z_tgt = data["z_tgt"].permute(1,0,2) # (tgt_seq, bs, z_dim)
+            z_tgt = data["z_tgt"].permute(1,0) # (tgt_seq, bs)
             vae_out = None
-            mask_rate=0
 
         ### Autoregressively plan skills
         z_hat = self.forward_plan(goal_src, qpos_plan, img_info_plan,
                                     z_tgt, skill_pad_mask,
-                                    plan_mem_mask, plan_tgt_mask, 
-                                    mask_rate=mask_rate) # (skill_seq, bs, num_skills)
+                                    plan_mem_mask, plan_tgt_mask) # (skill_seq, bs, num_skills)
         
         if torch.any(torch.isnan(z_hat)):
             with open("ERROR_DATA.pickle",'+wb') as f:
                 pickle.dump(data, f)
             raise ValueError(f"NaNs encountered during planning! Data saved to ERROR_DATA.pickle")
         
-        z_pred = self.vae.vq.top_k_sampling(z_hat.clone().detach(), 5) # (skill_seq, bs, z_dim)
-        z_pred = self.vae.vq.indices_to_codes(z_pred)
+        z_idx = top_k_sampling(z_hat.clone().detach(), 5, 1, device=self._device).squeeze(-1) # (skill_seq, bs)
+        z_code = self.vae.vq.indices_to_codes(z_idx)
         
         ### Get decoder masks
         if self.vae.autoregressive_decode:
@@ -183,16 +173,17 @@ class TSkillPlan(nn.Module):
         else:
             dec_mem_mask = dec_tgt_mask = None
         ### Decoder skills
-        a_hat = self.vae.skill_decode(z_pred,
+        a_hat = self.vae.skill_decode(z_code,
                                       seq_pad_mask, skill_pad_mask,
                                       dec_mem_mask, dec_tgt_mask)
 
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
 
         if not is_training:
-            z_hat = z_pred
-
-        z_hat = z_hat.permute(1,0,2) # (bs, skill_seq, num_skills)
+            z_hat = z_idx # (skill_seq, bs)
+            z_hat = z_hat.transpose(0,1) # (skill_seq, bs)
+        else:
+            z_hat = z_hat.permute(1,0,2) # (bs, skill_seq, num_skills)
         
         return dict(z_hat=z_hat ,a_hat=a_hat, vae_out=vae_out)
         
@@ -209,40 +200,23 @@ class TSkillPlan(nn.Module):
             - img_info: tuple of
                 - img_src: (1 | MNS|<, bs, num_cam, h*w, c)
                 - img_pe (1 | MNS|<, bs, num_cam, h*w, hidden)
-            - tgt: skill sequence (MNS|<, bs, z_dim)
+            - tgt: skill sequence indices (MNS|<, bs)
             - tgt_pad_mask: square subsequent mask (MNS|<, MNS|<)
         """
         bs, MNS, _ = qpos.shape # Use bs for masking
         img_src, img_pe = img_info # (1, bs, num_cam, h*w, c&hidden)
         goal_src = goal_info # (1, bs, num_cam, h*w, c&hidden) | (bs, num_tasks)/None
 
-        ### type embeddings
-        type_embed = self.input_embed.weight * self.input_embed_scale_factor
-        type_embed = type_embed.unsqueeze(1).repeat(1, bs, 1) # (3, bs, hidden_dim)
-
         # position
         state_src = self.src_state_proj(qpos).permute(1, 0, 2) # (bs, 1|MNS, hidden_dim/4)
-        # state_src = self.src_state_norm(state_src).permute(1, 0, 2) # (1|MNS, bs, hidden_dim)
-        # state_src = state_src + type_embed[0, :, :] # add type 1 "state" embedding
-        # state_pe = self.get_pos_table(state_src.shape[0]).permute(1, 0, 2) * self.src_qpos_pos_scale_factor
-        # state_pe = state_pe.repeat(1,bs,1)
-        # state_src = state_src + state_pe
 
         # image
+        img_pe = img_pe * self.img_pe_scale_factor
+        img_src = img_src + img_pe
         img_src = self.image_proj(img_src) # (1|MNS, bs, num_cam, h*w, 3*hidden/8)
         img_src = img_src.transpose(3,4) # (1|MNS, bs, num_cam, 3*hidden/8, h*w)
         img_src = self.src_img_proj(img_src).squeeze(-1) # (1|MNS, bs, num_cam, 3*hidden/8)
         img_src = img_src.flatten(2,3) # (1|MNS, bs, 3*hidden/4)
-
-        # img_src = self.image_feat_norm(img_src)
-        # img_pe = img_pe * self.img_pe_scale_factor
-        # img_src = img_src + img_pe
-        # img_src = img_src.flatten(2,3) # (1|MNS, bs, num_cam*h*w, hidden)
-        # img_src = img_src.permute(0, 2, 1, 3) # (1|MNS, h*num_cam*w, bs, hidden)
-        # img_pos = self.get_pos_table(img_src.shape[0]).permute(1, 0, 2).unsqueeze(1) * self.src_img_pos_scale_factor # (1|MSL, 1, bs, hidden)
-        # img_src = img_src + img_pos # Add temporal positional encoding
-        # img_src = img_src.flatten(0,1) # (num_cam*h*w|*MNS, bs, hidden)
-        # img_src = img_src + type_embed[1, :, :] # add type 2 "image" embedding
 
         context = torch.cat((state_src, img_src), dim=-1) # (1|MNS, bs, hidden)
         context_pe = self.get_pos_table(context.shape[0]).permute(1, 0, 2) * self.src_qpos_pos_scale_factor
@@ -253,23 +227,15 @@ class TSkillPlan(nn.Module):
         goal_src = self.goal_proj(goal_src) # (bs, hidden)
         goal_src = self.goal_feat_norm(goal_src)
         goal_src = goal_src.unsqueeze(0) # (1, bs, hidden)
-        # goal_src = goal_src + type_embed[2, :, :] # add type 3 "goal" embedding
 
         # src
         src = torch.cat([context, goal_src], axis=0) # (1+MNS, bs, hidden_dim)
-        # src = self.src_norm(src)
         
         # tgt
-        tgt = self.tgt_z_proj(tgt) # (MNS|<, bs, hidden_dim)
+        tgt = self.input_embed(tgt) # (MNS|<, bs, hidden_dim)
         tgt_pe = self.get_pos_table(tgt.shape[0]).permute(1,0,2).repeat(1, bs, 1) * self.tgt_pos_scale_factor # (MNS|<, bs, hidden_dim)
         tgt = self.tgt_norm(tgt)
         tgt = tgt + tgt_pe
-
-        val = kwargs.get("mask_rate")
-        if val > 0: # Randomly mask previous skills in causal mask
-            tgt_dropout_mask = torch.where(torch.rand_like(tgt_mask)<val,-torch.inf,0.)
-            tgt_dropout_mask = torch.tril(tgt_dropout_mask, diagonal=-1)
-            tgt_mask = tgt_mask + tgt_dropout_mask
 
         # query encoder model
         z_output = self.transformer(tgt, src, tgt_mask=tgt_mask, memory_mask=mem_mask,
@@ -297,7 +263,7 @@ class TSkillPlan(nn.Module):
         if t_act == 0:
             # Set or update data related to current planning segment
             if self.execution_data["t_plan"] == 0:
-                self.execution_data["z_tgt"] = self.tgt_start_token.repeat(bs,1,1)
+                self.execution_data["z_tgt"] = self.tgt_start_token * torch.ones(bs,1,device=self._device).to(torch.int) # (bs,1)
                 self.execution_data["actions"] = None
                 self.execution_data["img_feat"] = img_src # (bs, seq, ...)
                 self.execution_data["img_pe"] = img_pe
@@ -310,17 +276,13 @@ class TSkillPlan(nn.Module):
             # Set/update data required for model call
             self.execution_data["skill_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1])
             self.execution_data["seq_pad_mask"] = torch.zeros(bs,self.execution_data["z_tgt"].shape[1]*self.max_skill_len)
-            if "goal_feat" in data.keys():
-                self.execution_data["goal_feat"] = data["goal_feat"]
-                self.execution_data["goal_pe"] = data["goal_pe"]
-            else:
-                self.execution_data["goal"] = data["goal"]
+            self.execution_data["goal"] = data["goal"]
 
             out = self.forward(self.execution_data, use_precalc=True)
 
             z_hat = out["z_hat"]
-            self.execution_data["z_hat"] =  z_hat # (bs, sk, z_dim)
-            self.execution_data["z_tgt"] = torch.cat((self.execution_data["z_tgt"], z_hat[:,-1:,:]), dim=1)
+            self.execution_data["z_hat"] =  z_hat # (bs, sk)
+            self.execution_data["z_tgt"] = torch.cat((self.execution_data["z_tgt"], z_hat[:,-1:]), dim=1).to(torch.int)
             self.execution_data["a_hat"] = out["a_hat"] # (bs, seq, act_dim)
 
         a_t = self.execution_data["a_hat"][:,t_act-self.max_skill_len,:]

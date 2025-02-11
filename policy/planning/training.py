@@ -162,30 +162,22 @@ class Trainer(BaseTrainer):
 
         a_hat = out["a_hat"] # (bs, seq, act_dim)
         z_hat = out["z_hat"] # (bs, skill_seq, num_skills)
-        z_targ = out["vae_out"]["z"] # (bs, skill_seq, z_dim)
         
         # Get unpadded action loss
         a_hat_l = a_hat[action_loss_mask]
         a_targ_l = a_targ[action_loss_mask]
-        # loss_dict["act_plan_loss"] = self.act_weight * F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions
-        # metric_dict["act_plan_loss"] = (F.mse_loss(a_hat_l, a_targ_l, reduction="sum") / num_actions)
-        metric_dict["act_plan_l1_loss"] = F.l1_loss(a_hat_l, a_targ_l)
+        metric_dict["act_plan_loss"] = F.l1_loss(a_hat_l, a_targ_l)
 
         # Get unpadded skill nll loss
-        z_targ_l = self.model.vae.vq.codes_to_indices(z_targ)
+        z_targ_l = out["vae_out"]["idx"]
         z_targ_l = z_targ_l[latent_loss_mask].to('cpu',torch.int64)
         z_hat_l = z_hat[latent_loss_mask].to('cpu')
-        loss_dict["z_loss"] = self.z_weight * torch.nn.CrossEntropyLoss(reduction="sum")(z_hat_l, z_targ_l) / num_latent
+        loss_dict["z_loss"] = self.z_weight * torch.nn.CrossEntropyLoss()(z_hat_l, z_targ_l)
 
         # Action vector metrics
         metric_dict["aplan_vector_traj"] = a_hat.detach()
         metric_dict["ahat_vector"] = a_hat_l.detach()
         metric_dict["atarg_vector"] = a_targ_l.detach()
-
-        # Compute some time dependent metrics
-        for i in [1,50,100]:
-            metric_dict[f"batch_mean_plan_joint_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,:-1], a_targ[:,:i,:-1], reduction="sum") / (num_actions * (act_dim - 1) / act_dim)
-            metric_dict[f"batch_mean_plan_grip_error_til_t{i}"] = F.l1_loss(a_hat[:,:i,-1], a_targ[:,:i,-1], reduction="sum") / (num_actions * 1 / act_dim)
 
         if self.train_vae:
             vae_loss_dict, vae_metric_dict = self.vae_trainer.compute_loss(data, out["vae_out"])

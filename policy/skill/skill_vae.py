@@ -10,25 +10,6 @@ import dill as pickle
 from policy.dataset.masking_utils import get_dec_ar_masks, get_enc_causal_masks
 
 
-# class STEFunction(torch.autograd.Function):
-#     @staticmethod
-#     def forward(ctx, input):
-#         return torch.round(input).float()
-
-#     @staticmethod
-#     def backward(ctx, grad_output):
-#         return grad_output
-    
-
-# class StraightThroughEstimator(nn.Module):
-#     def __init__(self):
-#         super().__init__()
-
-#     def forward(self, x):
-#             x = STEFunction.apply(x)
-#             return x
-
-
 def get_sinusoid_encoding_table(n_position, d_hid):
     def get_position_angle_vec(position):
         return [position / np.power(10000, 2 * (hid_j // 2) / d_hid) for hid_j in range(d_hid)]
@@ -40,45 +21,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
 
 
-# class Quantization(nn.Module):
-#     def __init__(self, alpha, device, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-#         self.alpha = alpha
-#         self.z_dim = self.alpha.shape[0]
-#         self._device = device
-#         self.round_ste = StraightThroughEstimator()
-
-#         self.skill_dict = dict()
-#         self.reverse_skill_dict = dict()
-#         indices = torch.ones(tuple(self.alpha.to(torch.int).tolist())).nonzero().to(self._device)
-#         for i in range(indices.shape[0]):
-#             skill = torch.floor(indices[i] - torch.floor(self.alpha / 2))
-#             self.skill_dict[tuple(skill.tolist())] = i
-#             self.reverse_skill_dict[i] = skill
-
-#     def forward(self, x):
-#         z = torch.floor(self.alpha / 2) * torch.tanh(x)
-#         z = self.round_ste(z)
-#         return z
-
-#     def indices_to_codes(self, indices):
-#         """Turn a tensor of indices (bs, seq) into a tensor of codes (bs, seq, z_dim)"""
-#         z = torch.zeros(indices.shape[0],indices.shape[1],self.z_dim, device=self._device)
-#         for i in range(indices.shape[0]):
-#             for j in range(indices.shape[1]):
-#                 z[i,j,:] = self.reverse_skill_dict[indices[i,j].item()]
-#         return z
-
-#     def codes_to_indices(self, codes):
-#         """Turn a tensor of codes (bs, seq, z_dim) into a tensor of codes (bs, seq)"""
-#         indices = torch.zeros(codes.shape[0],codes.shape[1], device=self._device)
-#         for i in range(indices.shape[0]):
-#             for j in range(indices.shape[1]):
-#                 indices[i,j] = self.skill_dict[tuple(codes[i,j,:].tolist())]
-#         return indices
-
-
-def top_k_sampling(logits, k=5, temperature=1.0):
+def top_k_sampling(logits, k=5, temperature=1.0, device='cpu'):
     # Apply temperature scaling
     scaled_logits = logits / temperature
     # Find the top k values and indices
@@ -86,7 +29,7 @@ def top_k_sampling(logits, k=5, temperature=1.0):
     # Compute probabilities from top values
     top_probs = torch.softmax(top_values, dim=-1)
     # Sample token index from the filtered probabilities
-    sampled_indices = torch.zeros(top_probs.shape[0], top_probs.shape[1], 1, device=self._device)
+    sampled_indices = torch.zeros(top_probs.shape[0], top_probs.shape[1], 1, device=device)
     for i in range(top_probs.shape[0]):
         sampled_indices[i,:,:] = torch.multinomial(top_probs[i,:,:], num_samples=1, replacement=True)
     sampled_indices = sampled_indices.to(torch.int64)
@@ -127,9 +70,6 @@ class TSkillCVAE(nn.Module):
         self.decoder = decoder
         self.encoder = encoder
         self.hidden_dim = decoder.d_model
-        self.alpha = torch.tensor(alpha).to(self._device, torch.float)
-        self.num_skills = torch.prod(self.alpha).to(self._device, torch.int).item()
-        self.z_dim = self.alpha.shape[0]
         self.max_skill_len = max_skill_len
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -140,6 +80,8 @@ class TSkillCVAE(nn.Module):
         self.encoder_is_causal = encoder_is_causal
 
         self.vq = FSQ(dim=self.hidden_dim, levels=alpha)
+        self.num_skills = self.vq.codebook_size
+        self.z_dim = self.vq.codebook_dim
 
         ### Get a sinusoidal position encoding table for a given sequence size
         self.get_pos_table = lambda x: get_sinusoid_encoding_table(x, self.hidden_dim).to(self._device) # (1, x, hidden_dim)
@@ -168,10 +110,6 @@ class TSkillCVAE(nn.Module):
         self.enc_image_proj = nn.Linear(self.num_img_feats, 1)
         self.enc_src_norm = self.norm(self.hidden_dim)
         self.enc_tgt_norm = self.norm(self.hidden_dim)
-
-        ### Latent
-        self.enc_z = nn.Linear(self.hidden_dim, self.z_dim) # project hidden -> latent [std; var]
-        self.dec_z = nn.Linear(self.z_dim, self.hidden_dim) # project latent -> hidden
 
         ### Decoder
         self.dec_input_state_proj = nn.Linear(state_dim, self.hidden_dim)
@@ -257,9 +195,10 @@ class TSkillCVAE(nn.Module):
 
         # Reorder outputs to match inputs
         a_hat = a_hat.permute(1,0,2) # (bs, seq, act_dim)
-        z = z.permute(1,0,2) # (bs, seq, z_dim)
+        z = z.permute(1,0,2) # (bs, seq, hidden_dim)
+        idx = indices.permute(1,0) # (bs, seq)
 
-        return dict(a_hat=a_hat, z=z)
+        return dict(a_hat=a_hat, z=z, idx=idx)
         
 
     def forward_encode(self, qpos, actions, img_info, 
@@ -349,8 +288,6 @@ class TSkillCVAE(nn.Module):
                                     tgt_is_causal=False, memory_is_causal=False) # (skill_seq, bs, hidden_dim)
         
         z, indices = self.vq(enc_output)
-        print(f"==>> z.shape: {z.shape}")
-        print(f"==>> indices.shape: {indices.shape}")
 
         return z, indices
 
@@ -376,7 +313,7 @@ class TSkillCVAE(nn.Module):
         if tgt_mask is not None:
             tgt_mask = tgt_mask.to(self._device)
 
-        num_z, bs,_ = z.shape
+        num_z, bs, _ = z.shape
 
         # skills
         z_src = self.dec_input_z_norm(z) # (num_z, bs, hidden_dim)

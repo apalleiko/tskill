@@ -78,7 +78,7 @@ class LiberoDataset(Dataset):
                  pad: bool=True, augmentation=None,
                  action_scaling=None, state_scaling=None,
                  full_seq: bool = True, autoregressive_decode = False,
-                 encoder_is_causal = False, goal_mode = "image",
+                 encoder_is_causal = False, goal_mode = "one-hot",
                  **kwargs) -> None:
         self.method = method
         self.dataset_file = dataset_file
@@ -143,15 +143,7 @@ class LiberoDataset(Dataset):
             rgb = torch.from_numpy(rgb).float().permute((0, 4, 3, 1, 2))[i0:,...] # (seq, num_cams, channels, img_h, img_w)
 
         if self.method == "plan":
-            if self.goal_mode == "image":
-                if use_precalc:
-                    data["goal_feat"] = img_feat[-1:,...]
-                    data["goal_pe"] = img_pe[-1:,...]
-                    # data["goal_pe_plan"] = img_pe2[-1:,...]
-                else:
-                    data["goal"] = rgb[-1:,...]
-            else:
-                data["goal"] = self.goal_mode
+            data["goal"] = self.goal_mode
 
         # Add padding to sequences to match lengths and generate padding masks
         if use_precalc:
